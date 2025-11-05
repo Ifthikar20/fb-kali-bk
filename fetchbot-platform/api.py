@@ -6,10 +6,22 @@ from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime
 import asyncio
+import os
 
 from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
 from aws_manager import AWSManager
-from bot_orchestrator import BotOrchestrator
+
+# Detect which orchestrator to use based on environment
+USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
+
+if USE_MULTI_KALI:
+    from multi_kali_orchestrator import MultiKaliOrchestrator as OrchestratorClass
+    NUM_AGENTS = int(USE_MULTI_KALI)
+    print(f"[INIT] Using Multi-Kali orchestrator with {NUM_AGENTS} agents")
+else:
+    from bot_orchestrator import BotOrchestrator as OrchestratorClass
+    NUM_AGENTS = 0
+    print("[INIT] Using specialized bots orchestrator")
 
 app = FastAPI(title="FetchBot.ai API", version="1.0.0")
 security = HTTPBearer()
@@ -103,19 +115,24 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
         job.status = JobStatus.RUNNING
         job.started_at = datetime.utcnow()
         db.commit()
-        
-        orchestrator = BotOrchestrator(org_elastic_ip)
+
+        # Create orchestrator (multi-kali or specialized bots)
+        if USE_MULTI_KALI:
+            orchestrator = OrchestratorClass(org_elastic_ip, num_agents=NUM_AGENTS)
+        else:
+            orchestrator = OrchestratorClass(org_elastic_ip)
+
         results = await orchestrator.execute_pentest(target)
         
         for finding_data in results['findings']:
             finding = Finding(
                 pentest_job_id=job_id,
-                title=finding_data['title'],
-                severity=finding_data['severity'],
-                vulnerability_type=finding_data['type'],
-                url=finding_data['url'],
-                payload=finding_data['payload'],
-                discovered_by=finding_data['discovered_by']
+                title=finding_data.get('title', 'Unknown'),
+                severity=finding_data.get('severity', 'info'),
+                vulnerability_type=finding_data.get('type', 'unknown'),
+                url=finding_data.get('url'),
+                payload=finding_data.get('payload'),
+                discovered_by=finding_data.get('discovered_by', 'unknown')
             )
             db.add(finding)
         
