@@ -31,58 +31,79 @@ services:
       timeout: 5s
       retries: 5
 
-  # Network Bot - Port scanning and network reconnaissance
-  network-bot:
+  # Kali Agent 1
+  kali-agent-1:
     build:
-      context: ./bots/network-bot
+      context: ./kali-agent
       dockerfile: Dockerfile
-    container_name: fetchbot-network-bot
+    container_name: kali-agent-1
+    environment:
+      - AGENT_ID=kali-agent-1
+      - AGENT_PORT=9000
     ports:
-      - "8002:8002"
+      - "9001:9000"
     networks:
       - fetchbot
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
-  # UI Bot - Web application vulnerability scanning
-  ui-bot:
+  # Kali Agent 2
+  kali-agent-2:
     build:
-      context: ./bots/ui-bot
+      context: ./kali-agent
       dockerfile: Dockerfile
-    container_name: fetchbot-ui-bot
+    container_name: kali-agent-2
+    environment:
+      - AGENT_ID=kali-agent-2
+      - AGENT_PORT=9000
     ports:
-      - "8001:8001"
+      - "9002:9000"
     networks:
       - fetchbot
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
-  # DB Bot - SQL injection and database vulnerability scanning
-  db-bot:
+  # Kali Agent 3
+  kali-agent-3:
     build:
-      context: ./bots/db-bot
+      context: ./kali-agent
       dockerfile: Dockerfile
-    container_name: fetchbot-db-bot
+    container_name: kali-agent-3
+    environment:
+      - AGENT_ID=kali-agent-3
+      - AGENT_PORT=9000
     ports:
-      - "8003:8003"
+      - "9003:9000"
     networks:
       - fetchbot
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
-  # Main API Server
+  # Main API Server with Multi-Kali Orchestrator
   api:
     build: .
     container_name: fetchbot-api
@@ -91,6 +112,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://fetchbot:fetchbot123@postgres:5432/fetchbot
       - REDIS_URL=redis://redis:6379
+      - NUM_KALI_AGENTS=3
     env_file:
       - .env
     depends_on:
@@ -98,11 +120,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      network-bot:
+      kali-agent-1:
         condition: service_started
-      ui-bot:
+      kali-agent-2:
         condition: service_started
-      db-bot:
+      kali-agent-3:
         condition: service_started
     volumes:
       - ./:/app
@@ -115,3 +137,6 @@ services:
 networks:
   fetchbot:
     driver: bridge
+
+# To scale Kali agents dynamically:
+# docker-compose -f docker-compose-multi-kali.yml up --scale kali-agent=5

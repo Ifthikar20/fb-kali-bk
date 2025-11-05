@@ -6,10 +6,22 @@ from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 from datetime import datetime
 import asyncio
+import os
 
 from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
 from aws_manager import AWSManager
-from bot_orchestrator import BotOrchestrator
+
+# Detect which orchestrator to use based on environment
+USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
+
+if USE_MULTI_KALI:
+    from multi_kali_orchestrator import MultiKaliOrchestrator as OrchestratorClass
+    NUM_AGENTS = int(USE_MULTI_KALI)
+    print(f"[INIT] Using Multi-Kali orchestrator with {NUM_AGENTS} agents")
+else:
+    from bot_orchestrator import BotOrchestrator as OrchestratorClass
+    NUM_AGENTS = 0
+    print("[INIT] Using specialized bots orchestrator")
 
 app = FastAPI(title="FetchBot.ai API", version="1.0.0")
 security = HTTPBearer()
@@ -103,19 +115,24 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
         job.status = JobStatus.RUNNING
         job.started_at = datetime.utcnow()
         db.commit()
-        
-        orchestrator = BotOrchestrator(org_elastic_ip)
+
+        # Create orchestrator (multi-kali or specialized bots)
+        if USE_MULTI_KALI:
+            orchestrator = OrchestratorClass(org_elastic_ip, num_agents=NUM_AGENTS)
+        else:
+            orchestrator = OrchestratorClass(org_elastic_ip)
+
         results = await orchestrator.execute_pentest(target)
         
         for finding_data in results['findings']:
             finding = Finding(
                 pentest_job_id=job_id,
-                title=finding_data['title'],
-                severity=finding_data['severity'],
-                vulnerability_type=finding_data['type'],
-                url=finding_data['url'],
-                payload=finding_data['payload'],
-                discovered_by=finding_data['discovered_by']
+                title=finding_data.get('title', 'Unknown'),
+                severity=finding_data.get('severity', 'info'),
+                vulnerability_type=finding_data.get('type', 'unknown'),
+                url=finding_data.get('url'),
+                payload=finding_data.get('payload'),
+                discovered_by=finding_data.get('discovered_by', 'unknown')
             )
             db.add(finding)
         
@@ -234,6 +251,68 @@ async def get_job_findings(
             for f in findings
         ]
     }
+
+@app.get("/api/pentest/{job_id}/report/{format}")
+async def get_job_report(
+    job_id: str,
+    format: str,
+    org: Organization = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """Generate report for pentest job"""
+    from fastapi.responses import HTMLResponse, PlainTextResponse
+    from report_generator import ReportGenerator
+
+    # Validate format
+    if format not in ['html', 'json', 'markdown']:
+        raise HTTPException(status_code=400, detail="Invalid format. Use: html, json, or markdown")
+
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Get all findings
+    findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
+
+    # Prepare data
+    pentest_data = {
+        'target': job.target,
+        'attack_ip': job.attack_ip,
+        'timestamp': job.created_at.isoformat() if job.created_at else None,
+        'findings': [
+            {
+                'title': f.title,
+                'description': f.description,
+                'severity': f.severity.value,
+                'type': f.vulnerability_type,
+                'url': f.url,
+                'payload': f.payload,
+                'discovered_by': f.discovered_by,
+                'evidence': f.poc_code
+            }
+            for f in findings
+        ],
+        'analysis': f"Security assessment completed for {job.target}. Total findings: {len(findings)}",
+        'scan_history': []
+    }
+
+    generator = ReportGenerator()
+
+    if format == 'html':
+        html_report = generator.generate_html_report(pentest_data)
+        return HTMLResponse(content=html_report)
+
+    elif format == 'json':
+        json_report = generator.generate_json_report(pentest_data)
+        return PlainTextResponse(content=json_report, media_type="application/json")
+
+    elif format == 'markdown':
+        md_report = generator.generate_markdown_report(pentest_data)
+        return PlainTextResponse(content=md_report, media_type="text/markdown")
 
 @app.get("/health")
 async def health_check():
