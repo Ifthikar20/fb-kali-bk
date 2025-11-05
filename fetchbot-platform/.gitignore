@@ -1,0 +1,83 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Virtual environments ---
+venv/
+env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Distribution / packaging ---
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+*.egg
+
+# --- PyInstaller ---
+*.manifest
+*.spec
+
+# --- Unit test / coverage reports ---
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# --- Logs and debug ---
+*.log
+*.pot
+*.mo
+
+# --- Jupyter Notebook checkpoints ---
+.ipynb_checkpoints
+
+# --- IDE / Editor settings ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS-specific files ---
+.DS_Store
+Thumbs.db
+
+# --- Environment variables / secrets ---
+.env
+.env.*
+*.env
+
+# --- Type checker ---
+.mypy_cache/
+.pyre/
+.pytype/
+
+# --- Django / Flask / FastAPI specifics (if used) ---
+*.sqlite3
+instance/
+db.sqlite3
+__pypackages__/
+
+# --- Others ---
+.cache/
+*.bak
+
+
+
+# Ignore PostgreSQL data directories
+data/postgres/
+**/data/postgres/
+**/pgdata/
+**/postgres_data/

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: fetchbot-postgres
+    environment:
+      POSTGRES_DB: fetchbot
+      POSTGRES_USER: fetchbot
+      POSTGRES_PASSWORD: fetchbot123
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - fetchbot
+
+  redis:
+    image: redis:7-alpine
+    container_name: fetchbot-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - fetchbot
+
+  api:
+    build: .
+    container_name: fetchbot-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://fetchbot:fetchbot123@postgres:5432/fetchbot
+      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./:/app
+    networks:
+      - fetchbot
+    command: python main.py
+
+networks:
+  fetchbot:
+    driver: bridge
