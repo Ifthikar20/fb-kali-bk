@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: fetchbot-postgres
+    environment:
+      POSTGRES_DB: fetchbot
+      POSTGRES_USER: fetchbot
+      POSTGRES_PASSWORD: fetchbot123
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - fetchbot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fetchbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: fetchbot-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - fetchbot
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kali Agent 1
+  kali-agent-1:
+    build:
+      context: ./kali-agent
+      dockerfile: Dockerfile
+    container_name: kali-agent-1
+    environment:
+      - AGENT_ID=kali-agent-1
+      - AGENT_PORT=9000
+    ports:
+      - "9001:9000"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Kali Agent 2
+  kali-agent-2:
+    build:
+      context: ./kali-agent
+      dockerfile: Dockerfile
+    container_name: kali-agent-2
+    environment:
+      - AGENT_ID=kali-agent-2
+      - AGENT_PORT=9000
+    ports:
+      - "9002:9000"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Kali Agent 3
+  kali-agent-3:
+    build:
+      context: ./kali-agent
+      dockerfile: Dockerfile
+    container_name: kali-agent-3
+    environment:
+      - AGENT_ID=kali-agent-3
+      - AGENT_PORT=9000
+    ports:
+      - "9003:9000"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Main API Server with Multi-Kali Orchestrator
+  api:
+    build: .
+    container_name: fetchbot-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://fetchbot:fetchbot123@postgres:5432/fetchbot
+      - REDIS_URL=redis://redis:6379
+      - NUM_KALI_AGENTS=3
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kali-agent-1:
+        condition: service_started
+      kali-agent-2:
+        condition: service_started
+      kali-agent-3:
+        condition: service_started
+    volumes:
+      - ./:/app
+      - ./data/evidence:/app/evidence
+    networks:
+      - fetchbot
+    command: python main.py
+    restart: unless-stopped
+
+networks:
+  fetchbot:
+    driver: bridge
+
+# To scale Kali agents dynamically:
+# docker-compose -f docker-compose-multi-kali.yml up --scale kali-agent=5
