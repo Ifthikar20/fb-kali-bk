@@ -74,10 +74,24 @@ __pypackages__/
 .cache/
 *.bak
 
-
-
+*venv
+.venv
+vnev*
 # Ignore PostgreSQL data directories
 data/postgres/
 **/data/postgres/
 **/pgdata/
 **/postgres_data/
+
+
+
+# --- Virtual environments ---
+**/venv/
+**/.venv/
+**/env/
+**/.env/
+**/ENV/
+**/venv.bak/
+**/env.bak/
+*venv*/
+*env*/
