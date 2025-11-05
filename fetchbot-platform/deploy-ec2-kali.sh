@@ -182,7 +182,47 @@ EOF
 echo "✓ User data script created"
 echo ""
 
-echo "Step 3: Launching EC2 Instance..."
+echo "Step 3: Checking/Creating SSH Key Pair..."
+
+# Set key pair name
+KEY_PAIR_NAME=${AWS_KEY_PAIR_NAME:-fetchbot-key}
+KEY_FILE="${KEY_PAIR_NAME}.pem"
+
+# Check if key pair exists in AWS
+KEY_EXISTS=$(aws ec2 describe-key-pairs \
+    --region $AWS_REGION \
+    --key-names $KEY_PAIR_NAME \
+    --query 'KeyPairs[0].KeyName' \
+    --output text 2>/dev/null || echo "None")
+
+if [ "$KEY_EXISTS" = "None" ] || [ -z "$KEY_EXISTS" ]; then
+    echo "Creating new key pair: $KEY_PAIR_NAME"
+
+    # Create key pair and save private key
+    aws ec2 create-key-pair \
+        --region $AWS_REGION \
+        --key-name $KEY_PAIR_NAME \
+        --query 'KeyMaterial' \
+        --output text > $KEY_FILE
+
+    # Set proper permissions
+    chmod 400 $KEY_FILE
+
+    echo "✓ Key pair created and saved to: $KEY_FILE"
+    echo "⚠️  IMPORTANT: Keep this file safe! You'll need it to SSH into your instance"
+else
+    echo "✓ Using existing key pair: $KEY_PAIR_NAME"
+
+    # Check if local key file exists
+    if [ ! -f "$KEY_FILE" ]; then
+        echo "⚠️  Warning: Key pair exists in AWS but $KEY_FILE not found locally"
+        echo "   You may not be able to SSH into the instance without the private key"
+    fi
+fi
+
+echo ""
+
+echo "Step 4: Launching EC2 Instance..."
 
 # Get latest Ubuntu AMI (we'll install Kali tools on it)
 AMI_ID=$(aws ec2 describe-images \
@@ -200,7 +240,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --region $AWS_REGION \
     --image-id $AMI_ID \
     --instance-type t3.medium \
-    --key-name ${AWS_KEY_PAIR_NAME:-fetchbot-key} \
+    --key-name $KEY_PAIR_NAME \
     --security-group-ids $SG_ID \
     --user-data file:///tmp/ec2-user-data.sh \
     --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=fetchbot-kali-instance},{Key=Platform,Value=FetchBot.ai}]" \
@@ -210,13 +250,13 @@ INSTANCE_ID=$(aws ec2 run-instances \
 echo "✓ Instance launched: $INSTANCE_ID"
 echo ""
 
-echo "Step 4: Waiting for instance to start..."
+echo "Step 5: Waiting for instance to start..."
 aws ec2 wait instance-running --region $AWS_REGION --instance-ids $INSTANCE_ID
 
 echo "✓ Instance is running"
 echo ""
 
-echo "Step 5: Getting instance details..."
+echo "Step 6: Getting instance details..."
 INSTANCE_INFO=$(aws ec2 describe-instances \
     --region $AWS_REGION \
     --instance-ids $INSTANCE_ID \
@@ -241,10 +281,10 @@ echo "  - http://$PUBLIC_IP:9002  (Kali Agent 2)"
 echo "  - http://$PUBLIC_IP:9003  (Kali Agent 3)"
 echo ""
 echo "SSH Access:"
-echo "  ssh ubuntu@$PUBLIC_IP"
+echo "  ssh -i $KEY_FILE ubuntu@$PUBLIC_IP"
 echo ""
 echo "Note: Please wait 5-10 minutes for Docker setup to complete"
-echo "Check status: ssh ubuntu@$PUBLIC_IP 'sudo docker ps'"
+echo "Check status: ssh -i $KEY_FILE ubuntu@$PUBLIC_IP 'sudo docker ps'"
 echo ""
 
 # Save instance info
@@ -256,6 +296,11 @@ Public IP: $PUBLIC_IP
 Public DNS: $PUBLIC_DNS
 Security Group: $SG_ID
 Region: $AWS_REGION
+Key Pair: $KEY_PAIR_NAME
+Private Key File: $KEY_FILE
+
+SSH Access:
+  ssh -i $KEY_FILE ubuntu@$PUBLIC_IP
 
 Kali Agent Endpoints:
 - http://$PUBLIC_IP:9001

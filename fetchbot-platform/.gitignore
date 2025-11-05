@@ -59,6 +59,11 @@ Thumbs.db
 .env.*
 *.env
 
+# --- AWS SSH Keys ---
+*.pem
+*.key
+ec2-instance-info.txt
+
 # --- Type checker ---
 .mypy_cache/
 .pyre/
