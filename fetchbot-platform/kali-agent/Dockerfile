@@ -36,8 +36,8 @@ WORKDIR /app
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python packages
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Install Python packages (Kali Linux requires --break-system-packages for pip in containers)
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy agent code
 COPY kali_agent.py .
