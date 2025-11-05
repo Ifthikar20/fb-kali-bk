@@ -9,7 +9,7 @@ import asyncio
 import os
 
 from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
-from aws_manager import AWSManager
+from config import get_settings
 
 # Detect which orchestrator to use based on environment
 USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
@@ -25,7 +25,26 @@ else:
 
 app = FastAPI(title="FetchBot.ai API", version="1.0.0")
 security = HTTPBearer()
-aws_manager = AWSManager()
+
+# Lazy-load AWS manager only when needed (for EC2 deployments)
+_aws_manager = None
+
+def get_aws_manager():
+    """Get AWS manager instance (lazy initialization)"""
+    global _aws_manager
+    if _aws_manager is None:
+        from aws_manager import AWSManager
+        settings = get_settings()
+
+        # Check if AWS credentials are configured
+        if not settings.aws_access_key_id or not settings.aws_secret_access_key:
+            raise HTTPException(
+                status_code=500,
+                detail="AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables."
+            )
+
+        _aws_manager = AWSManager()
+    return _aws_manager
 
 init_db()
 
@@ -68,6 +87,7 @@ async def create_organization(org_data: OrganizationCreate, db: Session = Depend
     db.refresh(org)
     
     try:
+        aws_manager = get_aws_manager()
         infra = aws_manager.create_organization_infrastructure(org.name, org.id)
         
         org.ec2_instance_id = infra['instance_id']
