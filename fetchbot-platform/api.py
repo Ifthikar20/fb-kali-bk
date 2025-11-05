@@ -235,6 +235,68 @@ async def get_job_findings(
         ]
     }
 
+@app.get("/api/pentest/{job_id}/report/{format}")
+async def get_job_report(
+    job_id: str,
+    format: str,
+    org: Organization = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """Generate report for pentest job"""
+    from fastapi.responses import HTMLResponse, PlainTextResponse
+    from report_generator import ReportGenerator
+
+    # Validate format
+    if format not in ['html', 'json', 'markdown']:
+        raise HTTPException(status_code=400, detail="Invalid format. Use: html, json, or markdown")
+
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Get all findings
+    findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
+
+    # Prepare data
+    pentest_data = {
+        'target': job.target,
+        'attack_ip': job.attack_ip,
+        'timestamp': job.created_at.isoformat() if job.created_at else None,
+        'findings': [
+            {
+                'title': f.title,
+                'description': f.description,
+                'severity': f.severity.value,
+                'type': f.vulnerability_type,
+                'url': f.url,
+                'payload': f.payload,
+                'discovered_by': f.discovered_by,
+                'evidence': f.poc_code
+            }
+            for f in findings
+        ],
+        'analysis': f"Security assessment completed for {job.target}. Total findings: {len(findings)}",
+        'scan_history': []
+    }
+
+    generator = ReportGenerator()
+
+    if format == 'html':
+        html_report = generator.generate_html_report(pentest_data)
+        return HTMLResponse(content=html_report)
+
+    elif format == 'json':
+        json_report = generator.generate_json_report(pentest_data)
+        return PlainTextResponse(content=json_report, media_type="application/json")
+
+    elif format == 'markdown':
+        md_report = generator.generate_markdown_report(pentest_data)
+        return PlainTextResponse(content=md_report, media_type="text/markdown")
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "platform": "FetchBot.ai"}

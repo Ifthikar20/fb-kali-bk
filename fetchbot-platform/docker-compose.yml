@@ -14,6 +14,11 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     networks:
       - fetchbot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fetchbot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -22,7 +27,64 @@ services:
       - "6379:6379"
     networks:
       - fetchbot
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # Network Bot - Port scanning and network reconnaissance
+  network-bot:
+    build:
+      context: ./bots/network-bot
+      dockerfile: Dockerfile
+    container_name: fetchbot-network-bot
+    ports:
+      - "8002:8002"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # UI Bot - Web application vulnerability scanning
+  ui-bot:
+    build:
+      context: ./bots/ui-bot
+      dockerfile: Dockerfile
+    container_name: fetchbot-ui-bot
+    ports:
+      - "8001:8001"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # DB Bot - SQL injection and database vulnerability scanning
+  db-bot:
+    build:
+      context: ./bots/db-bot
+      dockerfile: Dockerfile
+    container_name: fetchbot-db-bot
+    ports:
+      - "8003:8003"
+    networks:
+      - fetchbot
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Main API Server
   api:
     build: .
     container_name: fetchbot-api
@@ -34,13 +96,23 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      network-bot:
+        condition: service_started
+      ui-bot:
+        condition: service_started
+      db-bot:
+        condition: service_started
     volumes:
       - ./:/app
+      - ./data/evidence:/app/evidence
     networks:
       - fetchbot
     command: python main.py
+    restart: unless-stopped
 
 networks:
   fetchbot:
