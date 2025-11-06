@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     bot_ami_id: Optional[str] = None
     bot_instance_type: str = "t3.medium"
 
+    # Kali Agent Configuration
+    num_kali_agents: int = 3
+
     # AI (Required for Claude orchestration)
     anthropic_api_key: str
 
