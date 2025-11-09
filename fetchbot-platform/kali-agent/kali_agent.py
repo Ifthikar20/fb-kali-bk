@@ -321,6 +321,9 @@ class KaliAgent:
         try:
             response = await client.get(url, headers=self.headers)
 
+            # Capture all response headers for evidence
+            response_headers = dict(response.headers)
+
             security_headers = {
                 'X-Frame-Options': 'Clickjacking protection missing',
                 'X-Content-Type-Options': 'MIME sniffing protection missing',
@@ -332,19 +335,106 @@ class KaliAgent:
             for header, description in security_headers.items():
                 if header not in response.headers:
                     severity = 'high' if header == 'Content-Security-Policy' else 'medium'
+
+                    # Build detailed evidence
+                    evidence = {
+                        'http_method': 'GET',
+                        'status_code': response.status_code,
+                        'response_headers': response_headers,
+                        'missing_header': header,
+                        'server': response.headers.get('Server', 'Unknown'),
+                        'date_tested': response.headers.get('Date', ''),
+                        'detection_method': 'HTTP Header Analysis',
+                        'tool_used': f'FetchBot/{self.agent_id}',
+                        'request_sent': f'GET {url}',
+                        'curl_equivalent': f'curl -I {url}'
+                    }
+
+                    # Detailed remediation
+                    remediation = self._get_header_remediation(header)
+
                     findings.append({
                         'title': f'Missing: {header}',
                         'severity': severity,
                         'type': 'missing_header',
                         'header': header,
                         'description': description,
-                        'url': url
+                        'url': url,
+                        'evidence': evidence,
+                        'remediation': remediation,
+                        'cvss_score': 6.5 if severity == 'high' else 4.3,
+                        'cwe': self._get_cwe_for_header(header),
+                        'owasp_category': 'A05:2021 – Security Misconfiguration'
                     })
 
         except Exception as e:
             pass
 
         return findings
+
+    def _get_header_remediation(self, header: str) -> Dict:
+        """Get detailed remediation steps for missing header"""
+        remediation_map = {
+            'Content-Security-Policy': {
+                'fix': 'Add CSP header to HTTP responses',
+                'example': "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline';",
+                'implementation': {
+                    'nginx': "add_header Content-Security-Policy \"default-src 'self';\" always;",
+                    'apache': "Header always set Content-Security-Policy \"default-src 'self';\"",
+                    'express': "app.use(helmet.contentSecurityPolicy({directives: {defaultSrc: [\"'self'\"]}}));"
+                },
+                'references': [
+                    'https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP',
+                    'https://cheatsheetseries.owasp.org/cheatsheets/Content_Security_Policy_Cheat_Sheet.html'
+                ]
+            },
+            'Strict-Transport-Security': {
+                'fix': 'Add HSTS header to enforce HTTPS',
+                'example': 'Strict-Transport-Security: max-age=31536000; includeSubDomains',
+                'implementation': {
+                    'nginx': 'add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;',
+                    'apache': 'Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"',
+                    'express': "app.use(helmet.hsts({maxAge: 31536000, includeSubDomains: true}));"
+                },
+                'references': ['https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Strict-Transport-Security']
+            },
+            'X-Frame-Options': {
+                'fix': 'Add X-Frame-Options header to prevent clickjacking',
+                'example': 'X-Frame-Options: DENY',
+                'implementation': {
+                    'nginx': 'add_header X-Frame-Options "DENY" always;',
+                    'apache': 'Header always set X-Frame-Options "DENY"',
+                    'express': "app.use(helmet.frameguard({action: 'deny'}));"
+                },
+                'references': ['https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Frame-Options']
+            },
+            'X-Content-Type-Options': {
+                'fix': 'Add X-Content-Type-Options header',
+                'example': 'X-Content-Type-Options: nosniff',
+                'implementation': {
+                    'nginx': 'add_header X-Content-Type-Options "nosniff" always;',
+                    'apache': 'Header always set X-Content-Type-Options "nosniff"',
+                    'express': "app.use(helmet.noSniff());"
+                },
+                'references': ['https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Content-Type-Options']
+            }
+        }
+        return remediation_map.get(header, {
+            'fix': f'Add {header} security header',
+            'example': f'{header}: recommended-value',
+            'references': []
+        })
+
+    def _get_cwe_for_header(self, header: str) -> str:
+        """Map security header to CWE"""
+        cwe_map = {
+            'Content-Security-Policy': 'CWE-1021: Improper Restriction of Rendered UI Layers or Frames',
+            'Strict-Transport-Security': 'CWE-319: Cleartext Transmission of Sensitive Information',
+            'X-Frame-Options': 'CWE-1021: Improper Restriction of Rendered UI Layers or Frames',
+            'X-Content-Type-Options': 'CWE-693: Protection Mechanism Failure',
+            'X-XSS-Protection': 'CWE-79: Cross-site Scripting (XSS)'
+        }
+        return cwe_map.get(header, 'CWE-16: Configuration')
 
     async def _enumerate_directories(self, client: httpx.AsyncClient, base_url: str) -> List[Dict]:
         """Directory enumeration"""
@@ -409,12 +499,14 @@ class KaliAgent:
 
             forms = soup.find_all('form')
 
-            for form in forms[:3]:  # Test first 3 forms
+            for form_idx, form in enumerate(forms[:3]):  # Test first 3 forms
                 action = form.get('action', '')
                 form_url = urljoin(url, action) if action else url
+                form_method = form.get('method', 'get').upper()
 
                 inputs = form.find_all(['input', 'textarea'])
                 data = {}
+                vulnerable_param = None
 
                 for inp in inputs:
                     name = inp.get('name')
@@ -426,13 +518,56 @@ class KaliAgent:
                         test_response = await client.post(form_url, data=data, headers=self.headers)
 
                         if payload in test_response.text:
+                            # Find which parameter was vulnerable
+                            for param_name in data.keys():
+                                vulnerable_param = param_name
+                                break
+
+                            # Capture context around the injection
+                            injection_context = self._extract_injection_context(test_response.text, payload)
+
+                            evidence = {
+                                'http_method': 'POST',
+                                'vulnerable_url': form_url,
+                                'vulnerable_parameter': vulnerable_param,
+                                'payload_used': payload,
+                                'injection_point': f'Form parameter: {vulnerable_param}',
+                                'response_status': test_response.status_code,
+                                'payload_reflected': True,
+                                'injection_context': injection_context,
+                                'form_action': action or '(same page)',
+                                'form_method': form_method,
+                                'detection_method': 'Reflected Payload Analysis',
+                                'tool_used': f'FetchBot/{self.agent_id}',
+                                'curl_equivalent': f'curl -X POST {form_url} -d "{vulnerable_param}={payload}"'
+                            }
+
+                            remediation = {
+                                'fix': 'Sanitize and encode user input before rendering in HTML',
+                                'implementation': {
+                                    'javascript': 'Use textContent instead of innerHTML, or DOMPurify.sanitize()',
+                                    'php': 'htmlspecialchars($input, ENT_QUOTES, \'UTF-8\')',
+                                    'python': 'from markupsafe import escape; escape(user_input)',
+                                    'general': 'Implement Content Security Policy (CSP) header'
+                                },
+                                'references': [
+                                    'https://owasp.org/www-community/attacks/xss/',
+                                    'https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html'
+                                ]
+                            }
+
                             findings.append({
-                                'title': 'XSS Vulnerability',
+                                'title': f'Reflected XSS in {vulnerable_param} parameter',
                                 'severity': 'high',
                                 'type': 'xss',
                                 'url': form_url,
                                 'payload': payload,
-                                'description': f'XSS vulnerability at {form_url}'
+                                'description': f'Reflected XSS vulnerability found in form parameter "{vulnerable_param}". User input is reflected back without proper sanitization, allowing arbitrary JavaScript execution.',
+                                'evidence': evidence,
+                                'remediation': remediation,
+                                'cvss_score': 7.1,
+                                'cwe': 'CWE-79: Improper Neutralization of Input During Web Page Generation',
+                                'owasp_category': 'A03:2021 – Injection'
                             })
                     except:
                         pass
@@ -441,6 +576,23 @@ class KaliAgent:
             pass
 
         return findings
+
+    def _extract_injection_context(self, html: str, payload: str, context_length: int = 100) -> str:
+        """Extract HTML context around injection point"""
+        try:
+            idx = html.find(payload)
+            if idx == -1:
+                return "Payload reflected but context unavailable"
+
+            start = max(0, idx - context_length)
+            end = min(len(html), idx + len(payload) + context_length)
+            context = html[start:end]
+
+            # Highlight the payload
+            context = context.replace(payload, f">>> {payload} <<<")
+            return context
+        except:
+            return "Context extraction failed"
 
     async def _test_sql_injection(self, client: httpx.AsyncClient, url: str, depth: str) -> List[Dict]:
         """Test for SQL injection"""
@@ -459,11 +611,13 @@ class KaliAgent:
             for form in forms[:2]:
                 action = form.get('action', '')
                 form_url = urljoin(url, action) if action else url
+                form_method = form.get('method', 'get').upper()
 
                 inputs = form.find_all(['input', 'textarea'])
 
                 for payload in payloads:
                     data = {}
+                    vulnerable_param = None
 
                     for inp in inputs:
                         name = inp.get('name')
@@ -475,13 +629,64 @@ class KaliAgent:
                             test_response = await client.post(form_url, data=data, headers=self.headers)
 
                             if self._contains_sql_error(test_response.text):
+                                # Extract specific error message
+                                sql_error = self._extract_sql_error(test_response.text)
+
+                                # Find vulnerable parameter
+                                for param_name in data.keys():
+                                    vulnerable_param = param_name
+                                    break
+
+                                evidence = {
+                                    'http_method': 'POST',
+                                    'vulnerable_url': form_url,
+                                    'vulnerable_parameter': vulnerable_param,
+                                    'payload_used': payload,
+                                    'injection_point': f'Form parameter: {vulnerable_param}',
+                                    'response_status': test_response.status_code,
+                                    'sql_error_detected': sql_error,
+                                    'database_type': self._detect_database_type(sql_error),
+                                    'error_in_response': True,
+                                    'form_action': action or '(same page)',
+                                    'form_method': form_method,
+                                    'detection_method': 'SQL Error Pattern Matching',
+                                    'tool_used': f'FetchBot/{self.agent_id}',
+                                    'curl_equivalent': f'curl -X POST {form_url} -d "{vulnerable_param}={payload}"'
+                                }
+
+                                remediation = {
+                                    'fix': 'Use parameterized queries (prepared statements) instead of string concatenation',
+                                    'implementation': {
+                                        'php_pdo': 'PDO: $stmt = $pdo->prepare("SELECT * FROM users WHERE id = :id"); $stmt->execute([\'id\' => $id]);',
+                                        'python': 'cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))',
+                                        'node_mysql': 'connection.query("SELECT * FROM users WHERE id = ?", [userId]);',
+                                        'java': 'PreparedStatement: stmt = conn.prepareStatement("SELECT * FROM users WHERE id = ?"); stmt.setInt(1, userId);'
+                                    },
+                                    'additional_steps': [
+                                        'Use ORM frameworks when possible',
+                                        'Validate and sanitize all user inputs',
+                                        'Apply principle of least privilege to database accounts',
+                                        'Disable detailed error messages in production',
+                                        'Implement WAF rules to block SQL injection attempts'
+                                    ],
+                                    'references': [
+                                        'https://owasp.org/www-community/attacks/SQL_Injection',
+                                        'https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html'
+                                    ]
+                                }
+
                                 findings.append({
-                                    'title': 'SQL Injection Vulnerability',
+                                    'title': f'SQL Injection in {vulnerable_param} parameter',
                                     'severity': 'critical',
                                     'type': 'sqli',
                                     'url': form_url,
                                     'payload': payload,
-                                    'description': f'SQL injection at {form_url}'
+                                    'description': f'Critical SQL Injection vulnerability detected in parameter "{vulnerable_param}". The application constructs SQL queries using unsanitized user input, allowing attackers to manipulate database queries. Database error: {sql_error}',
+                                    'evidence': evidence,
+                                    'remediation': remediation,
+                                    'cvss_score': 9.8,
+                                    'cwe': 'CWE-89: Improper Neutralization of Special Elements used in an SQL Command',
+                                    'owasp_category': 'A03:2021 – Injection'
                                 })
                                 break
                         except:
@@ -491,6 +696,42 @@ class KaliAgent:
             pass
 
         return findings
+
+    def _extract_sql_error(self, text: str) -> str:
+        """Extract specific SQL error message"""
+        sql_errors = [
+            ('mysql', ['mysql', 'you have an error in your sql syntax']),
+            ('postgresql', ['postgresql', 'pg_query', 'sqlstate']),
+            ('oracle', ['ora-', 'oracle']),
+            ('mssql', ['microsoft sql', 'odbc sql', 'sqlserver']),
+            ('sqlite', ['sqlite', 'sqlite3'])
+        ]
+
+        text_lower = text.lower()
+        for db_type, patterns in sql_errors:
+            for pattern in patterns:
+                if pattern in text_lower:
+                    # Try to extract the actual error message (first 200 chars)
+                    idx = text_lower.find(pattern)
+                    if idx != -1:
+                        return text[idx:min(idx + 200, len(text))].strip()
+
+        return "SQL error detected in response"
+
+    def _detect_database_type(self, error_msg: str) -> str:
+        """Detect database type from error message"""
+        error_lower = error_msg.lower()
+        if 'mysql' in error_lower:
+            return 'MySQL/MariaDB'
+        elif 'postgresql' in error_lower or 'pg_' in error_lower:
+            return 'PostgreSQL'
+        elif 'ora-' in error_lower:
+            return 'Oracle'
+        elif 'microsoft' in error_lower or 'mssql' in error_lower:
+            return 'Microsoft SQL Server'
+        elif 'sqlite' in error_lower:
+            return 'SQLite'
+        return 'Unknown'
 
     async def _check_database_errors(self, client: httpx.AsyncClient, url: str) -> List[Dict]:
         """Check for database error disclosure"""
