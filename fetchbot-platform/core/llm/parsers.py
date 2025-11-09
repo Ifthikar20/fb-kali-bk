@@ -40,6 +40,9 @@ def parse_tool_invocations(content: str) -> List[Dict[str, Any]]:
         tool_name = match.group(1).strip()
         function_body = match.group(2)
 
+        logger.debug(f"Found function block for: {tool_name}")
+        logger.debug(f"Function body: {function_body[:200]}...")  # First 200 chars
+
         # Extract parameters
         param_pattern = r'<parameter=([^>]+)>(.*?)</parameter>'
         param_matches = re.finditer(param_pattern, function_body, re.DOTALL)
@@ -49,13 +52,20 @@ def parse_tool_invocations(content: str) -> List[Dict[str, Any]]:
             param_name = param_match.group(1).strip()
             param_value = param_match.group(2).strip()
             args[param_name] = param_value
+            logger.debug(f"  Parsed parameter: {param_name} = {param_value[:100]}")
+
+        if not args:
+            logger.warning(f"No parameters found for tool {tool_name}. Function body was: {function_body[:300]}")
 
         invocations.append({
             "toolName": tool_name,
             "args": args
         })
 
-        logger.debug(f"Parsed tool invocation: {tool_name} with args: {list(args.keys())}")
+        logger.info(f"Parsed tool invocation: {tool_name} with {len(args)} args: {list(args.keys())}")
+
+    if not invocations and ('<function=' in content):
+        logger.error(f"Found <function= tags but failed to parse. Content sample: {content[:1000]}")
 
     return invocations
 
