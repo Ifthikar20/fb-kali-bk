@@ -9,9 +9,17 @@ from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import asyncio
 import os
+import logging
 
 from models import Organization, PentestJob, Finding, User, JobStatus, init_db, get_db
 from config import get_settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Detect which orchestrator to use based on environment
 USE_DYNAMIC_AGENTS = os.environ.get('USE_DYNAMIC_AGENTS', 'false').lower() == 'true'
@@ -69,6 +77,14 @@ def get_aws_manager():
     return _aws_manager
 
 init_db()
+
+# Log startup information
+logger.info("=" * 80)
+logger.info("FetchBot.ai API Starting")
+logger.info(f"Dynamic Agents Enabled: {USE_DYNAMIC_AGENTS}")
+logger.info(f"Orchestrator: {OrchestratorClass.__name__}")
+logger.info(f"Logging Level: INFO")
+logger.info("=" * 80)
 
 class OrganizationCreate(BaseModel):
     name: str
@@ -171,10 +187,13 @@ def verify_user_or_api_key(credentials: HTTPAuthorizationCredentials = Depends(s
 @app.post("/api/organizations")
 async def create_organization(org_data: OrganizationCreate, db: Session = Depends(get_db)):
     """Create organization with optional AWS EC2 instance"""
+    logger.info(f"[CREATE ORG] Creating organization: {org_data.name}, admin email: {org_data.admin_email}")
+
     slug = org_data.name.lower().replace(' ', '-')
 
     existing = db.query(Organization).filter(Organization.slug == slug).first()
     if existing:
+        logger.warning(f"[CREATE ORG] Organization with slug '{slug}' already exists")
         raise HTTPException(status_code=400, detail="Organization exists")
 
     org = Organization(
@@ -187,13 +206,18 @@ async def create_organization(org_data: OrganizationCreate, db: Session = Depend
     db.commit()
     db.refresh(org)
 
+    logger.info(f"[CREATE ORG] Organization created in database: ID={org.id}, API Key={org.api_key[:15]}...")
+
     # Try to create AWS infrastructure (optional for local testing)
     settings = get_settings()
     aws_enabled = settings.aws_access_key_id and settings.aws_secret_access_key and \
                   settings.aws_access_key_id != "your_aws_access_key_id"
 
+    logger.info(f"[CREATE ORG] AWS enabled: {aws_enabled}")
+
     if aws_enabled:
         try:
+            logger.info(f"[CREATE ORG] Attempting to create AWS infrastructure for org {org.id}")
             aws_manager = get_aws_manager()
             infra = aws_manager.create_organization_infrastructure(org.name, org.id)
 
@@ -204,6 +228,8 @@ async def create_organization(org_data: OrganizationCreate, db: Session = Depend
 
             db.commit()
             db.refresh(org)
+
+            logger.info(f"[CREATE ORG] AWS infrastructure created successfully: IP={org.elastic_ip}, Instance={org.ec2_instance_id}")
 
             return {
                 'id': org.id,
@@ -216,19 +242,19 @@ async def create_organization(org_data: OrganizationCreate, db: Session = Depend
 
         except Exception as e:
             # AWS failed, but keep organization for local testing
-            print(f"[WARNING] AWS infrastructure creation failed: {e}")
-            print("[INFO] Organization created in local-only mode")
+            logger.warning(f"[CREATE ORG] AWS infrastructure creation failed: {e}")
+            logger.info(f"[CREATE ORG] Falling back to local-only mode for org {org.id}")
             org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
             db.commit()
             db.refresh(org)
     else:
         # No AWS configured - local testing mode
-        print("[INFO] AWS not configured - creating organization in local-only mode")
+        logger.info(f"[CREATE ORG] AWS not configured - creating org {org.id} in local-only mode")
         org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
         db.commit()
         db.refresh(org)
 
-    return {
+    response = {
         'id': org.id,
         'name': org.name,
         'api_key': org.api_key,
@@ -236,6 +262,10 @@ async def create_organization(org_data: OrganizationCreate, db: Session = Depend
         'ec2_instance_id': org.ec2_instance_id,
         'mode': 'local' if not aws_enabled else 'aws'
     }
+
+    logger.info(f"[CREATE ORG] Organization {org.id} created successfully in {response['mode']} mode, IP: {org.elastic_ip}")
+
+    return response
 
 @app.get("/api/organizations/me")
 async def get_my_organization(org: Organization = Depends(verify_api_key)):
@@ -250,19 +280,24 @@ async def get_my_organization(org: Organization = Depends(verify_api_key)):
 @app.post("/api/register", response_model=Token)
 async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     """Register a new user"""
+    logger.info(f"[REGISTER] Registration attempt for username: {user_data.username}, email: {user_data.email}")
+
     # Check if username exists
     existing_user = db.query(User).filter(User.username == user_data.username).first()
     if existing_user:
+        logger.warning(f"[REGISTER] Username '{user_data.username}' already exists")
         raise HTTPException(status_code=400, detail="Username already exists")
 
     # Check if email exists
     existing_email = db.query(User).filter(User.email == user_data.email).first()
     if existing_email:
+        logger.warning(f"[REGISTER] Email '{user_data.email}' already registered")
         raise HTTPException(status_code=400, detail="Email already registered")
 
     # Check if organization exists
     org = db.query(Organization).filter(Organization.id == user_data.organization_id).first()
     if not org:
+        logger.warning(f"[REGISTER] Organization {user_data.organization_id} not found")
         raise HTTPException(status_code=404, detail="Organization not found")
 
     # Create user
@@ -278,6 +313,8 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
+    logger.info(f"[REGISTER] User created successfully: {user.id}, username: {user.username}, org: {user.organization_id}")
+
     # Create access token
     access_token = create_access_token(data={"sub": user.id})
 
@@ -292,17 +329,23 @@ async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
 @app.post("/api/login", response_model=Token)
 async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
     """Login user and return JWT token"""
+    logger.info(f"[LOGIN] Login attempt for username: {login_data.username}")
+
     # Find user
     user = db.query(User).filter(User.username == login_data.username).first()
     if not user or not user.check_password(login_data.password):
+        logger.warning(f"[LOGIN] Failed login for username: {login_data.username} (invalid credentials)")
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     if not user.active:
+        logger.warning(f"[LOGIN] Failed login for username: {login_data.username} (account disabled)")
         raise HTTPException(status_code=401, detail="User account is disabled")
 
     # Update last login
     user.last_login = datetime.utcnow()
     db.commit()
+
+    logger.info(f"[LOGIN] Successful login for user: {user.id}, username: {user.username}, org: {user.organization_id}")
 
     # Create access token
     access_token = create_access_token(data={"sub": user.id})
@@ -389,24 +432,39 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
+    logger.info(f"[BACKGROUND TASK] Starting dynamic scan for job {job_id}, target: {target}")
+
     engine = create_engine(db_url)
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
 
     try:
         job = db.query(PentestJob).filter(PentestJob.id == job_id).first()
+        if not job:
+            logger.error(f"[BACKGROUND TASK] Job {job_id} not found in database!")
+            return
+
+        logger.info(f"[BACKGROUND TASK] Job {job_id} found, setting status to RUNNING")
         job.status = JobStatus.RUNNING
         job.started_at = datetime.utcnow()
         db.commit()
 
         # Create dynamic orchestrator
+        logger.info(f"[BACKGROUND TASK] Creating orchestrator for IP: {org_elastic_ip}")
         orchestrator = OrchestratorClass(org_elastic_ip)
 
         # Run dynamic scan
+        logger.info(f"[BACKGROUND TASK] Starting orchestrator.run_scan() for {target}")
         results = await orchestrator.run_scan(target, job_id)
+        logger.info(f"[BACKGROUND TASK] Orchestrator finished. Results keys: {list(results.keys())}")
+        logger.info(f"[BACKGROUND TASK] Results status: {results.get('status')}, findings count: {len(results.get('findings', []))}")
 
         # Store findings
-        for finding_data in results.get('findings', []):
+        findings_count = len(results.get('findings', []))
+        logger.info(f"[BACKGROUND TASK] Storing {findings_count} findings to database")
+
+        for idx, finding_data in enumerate(results.get('findings', [])):
+            logger.debug(f"[BACKGROUND TASK] Storing finding {idx+1}/{findings_count}: {finding_data.get('title', 'Unknown')}")
             finding = Finding(
                 pentest_job_id=job_id,
                 title=finding_data.get('title', 'Unknown'),
@@ -419,22 +477,27 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
             )
             db.add(finding)
 
-        job.status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
+        final_status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
+        logger.info(f"[BACKGROUND TASK] Setting job status to {final_status.value}")
+
+        job.status = final_status
         job.completed_at = datetime.utcnow()
         job.total_findings = results.get('total_findings', len(results.get('findings', [])))
         job.critical_count = results.get('critical_findings', 0)
         job.high_count = results.get('high_findings', 0)
 
         db.commit()
+        logger.info(f"[BACKGROUND TASK] Job {job_id} completed successfully. Total findings: {job.total_findings}, Critical: {job.critical_count}, High: {job.high_count}")
 
     except Exception as e:
-        print(f"[DYNAMIC SCAN] Failed: {e}")
+        logger.error(f"[BACKGROUND TASK] Job {job_id} failed with exception: {e}")
         import traceback
-        traceback.print_exc()
+        logger.error(f"[BACKGROUND TASK] Traceback:\n{traceback.format_exc()}")
         job.status = JobStatus.FAILED
         db.commit()
     finally:
         db.close()
+        logger.info(f"[BACKGROUND TASK] Database connection closed for job {job_id}")
 
 @app.post("/api/pentest")
 async def create_pentest_job(
@@ -609,6 +672,8 @@ async def start_dynamic_scan(
 
     org, user = auth  # Unpack organization and optional user
 
+    logger.info(f"[SCAN START] Target: {scan_data.target}, Org: {org.id}, User: {user.id if user else 'API Key'}")
+
     # Create job with generic name
     job = PentestJob(
         organization_id=org.id,
@@ -622,6 +687,8 @@ async def start_dynamic_scan(
     db.commit()
     db.refresh(job)
 
+    logger.info(f"[SCAN CREATED] Job ID: {job.id}, Status: {job.status.value}")
+
     # Start dynamic scan in background
     background_tasks.add_task(
         run_dynamic_scan,
@@ -631,12 +698,17 @@ async def start_dynamic_scan(
         settings.database_url
     )
 
-    return {
+    logger.info(f"[SCAN QUEUED] Background task started for job {job.id}")
+
+    response = {
         "job_id": job.id,
         "status": job.status.value,
         "message": "Dynamic security assessment started",
         "target": scan_data.target
     }
+
+    logger.info(f"[SCAN RESPONSE] Returning: {response}")
+    return response
 
 
 @app.get("/scan/{job_id}")
@@ -648,16 +720,22 @@ async def get_scan_status(
     """Get scan status with findings (supports JWT or API key auth)"""
     org, user = auth
 
+    logger.info(f"[STATUS REQUEST] Job ID: {job_id}, Org: {org.id}")
+
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
     ).first()
 
     if not job:
+        logger.warning(f"[STATUS] Job {job_id} not found for org {org.id}")
         raise HTTPException(status_code=404, detail="Scan not found")
+
+    logger.info(f"[STATUS] Job {job_id} found - Status: {job.status.value}, Findings: {job.total_findings or 0}")
 
     # Get findings
     findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
+    logger.info(f"[STATUS] Retrieved {len(findings)} findings from database")
 
     # Format findings
     formatted_findings = [
@@ -698,6 +776,8 @@ async def get_scan_status(
     if job.status.value in ["completed", "running"]:
         response["agents_created"] = []  # Frontend should call /scan/{job_id}/agent-graph for details
 
+    logger.info(f"[STATUS RESPONSE] Job {job_id}: Status={job.status.value}, Findings={len(formatted_findings)}, Response keys={list(response.keys())}")
+
     return response
 
 
@@ -710,6 +790,8 @@ async def get_agent_graph(
     """Get agent hierarchy graph for visualization (supports JWT or API key auth)"""
     org, user = auth
 
+    logger.info(f"[AGENT GRAPH] Request for job {job_id}, org: {org.id}")
+
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -717,10 +799,14 @@ async def get_agent_graph(
     ).first()
 
     if not job:
+        logger.warning(f"[AGENT GRAPH] Job {job_id} not found for org {org.id}")
         raise HTTPException(status_code=404, detail="Scan not found")
+
+    logger.info(f"[AGENT GRAPH] Job {job_id} found, dynamic agents enabled: {USE_DYNAMIC_AGENTS}")
 
     # Get agent graph from dynamic orchestrator
     if not USE_DYNAMIC_AGENTS:
+        logger.info(f"[AGENT GRAPH] Dynamic agents not enabled, returning empty graph")
         return {
             "job_id": job_id,
             "message": "Agent graph only available for dynamic scans",
@@ -728,10 +814,15 @@ async def get_agent_graph(
         }
 
     try:
+        logger.info(f"[AGENT GRAPH] Fetching graph from orchestrator for job {job_id}")
         orchestrator = OrchestratorClass(org.elastic_ip)
         graph_data = await orchestrator.get_agent_graph(job_id)
+        logger.info(f"[AGENT GRAPH] Successfully retrieved graph with {len(graph_data.get('graph', {}).get('nodes', []))} nodes")
         return graph_data
     except Exception as e:
+        logger.error(f"[AGENT GRAPH] Error retrieving graph for job {job_id}: {e}")
+        import traceback
+        logger.error(f"[AGENT GRAPH] Traceback:\n{traceback.format_exc()}")
         return {
             "job_id": job_id,
             "error": str(e),
@@ -749,6 +840,8 @@ async def list_scans(
     """List all scans for user's organization (supports JWT or API key auth)"""
     org, user = auth
 
+    logger.info(f"[LIST SCANS] Request for org {org.id}, limit={limit}, offset={offset}")
+
     # Query scans for this organization
     scans_query = db.query(PentestJob).filter(
         PentestJob.organization_id == org.id
@@ -756,9 +849,11 @@ async def list_scans(
 
     # Get total count
     total = scans_query.count()
+    logger.info(f"[LIST SCANS] Found {total} total scans for org {org.id}")
 
     # Apply pagination
     scans = scans_query.limit(limit).offset(offset).all()
+    logger.info(f"[LIST SCANS] Returning {len(scans)} scans (page offset={offset})")
 
     # Format response
     scan_list = [
@@ -774,6 +869,8 @@ async def list_scans(
         }
         for scan in scans
     ]
+
+    logger.info(f"[LIST SCANS] Response prepared with {len(scan_list)} scans")
 
     return {
         "scans": scan_list,
@@ -792,6 +889,8 @@ async def delete_scan(
     """Delete a scan (supports JWT or API key auth)"""
     org, user = auth
 
+    logger.info(f"[DELETE SCAN] Request to delete job {job_id} for org {org.id}")
+
     # Find the scan
     scan = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -799,14 +898,20 @@ async def delete_scan(
     ).first()
 
     if not scan:
+        logger.warning(f"[DELETE SCAN] Job {job_id} not found for org {org.id}")
         raise HTTPException(status_code=404, detail="Scan not found")
 
+    logger.info(f"[DELETE SCAN] Job {job_id} found, target: {scan.target}, status: {scan.status.value}")
+
     # Delete associated findings first
-    db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
+    findings_deleted = db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
+    logger.info(f"[DELETE SCAN] Deleted {findings_deleted} findings for job {job_id}")
 
     # Delete the scan
     db.delete(scan)
     db.commit()
+
+    logger.info(f"[DELETE SCAN] Job {job_id} deleted successfully")
 
     return {"message": "Scan deleted successfully"}
 
