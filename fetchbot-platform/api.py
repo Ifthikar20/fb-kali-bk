@@ -427,6 +427,32 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
     finally:
         db.close()
 
+def append_scan_log(db: Session, job_id: str, level: str, message: str, step: str = None):
+    """Helper to append log entry to scan job"""
+    try:
+        job = db.query(PentestJob).filter(PentestJob.id == job_id).first()
+        if job:
+            if job.execution_logs is None:
+                job.execution_logs = []
+
+            log_entry = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "level": level,
+                "message": message
+            }
+            if step:
+                log_entry["step"] = step
+
+            # Append to existing logs
+            logs = job.execution_logs.copy() if job.execution_logs else []
+            logs.append(log_entry)
+            job.execution_logs = logs
+
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to append log to job {job_id}: {e}")
+
+
 async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url: str):
     """Background task to run dynamic agent scan"""
     from sqlalchemy import create_engine
@@ -445,23 +471,33 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
             return
 
         logger.info(f"[BACKGROUND TASK] Job {job_id} found, setting status to RUNNING")
+
+        # Initialize logs
+        job.execution_logs = []
+        append_scan_log(db, job_id, "INFO", f"🚀 Starting security scan for {target}", "initialization")
+
         job.status = JobStatus.RUNNING
         job.started_at = datetime.utcnow()
         db.commit()
 
         # Create dynamic orchestrator
         logger.info(f"[BACKGROUND TASK] Creating orchestrator for IP: {org_elastic_ip}")
+        append_scan_log(db, job_id, "INFO", f"🤖 Initializing AI orchestrator (Attack IP: {org_elastic_ip})", "orchestrator")
         orchestrator = OrchestratorClass(org_elastic_ip)
 
         # Run dynamic scan
         logger.info(f"[BACKGROUND TASK] Starting orchestrator.run_scan() for {target}")
+        append_scan_log(db, job_id, "INFO", "🔍 Launching dynamic security agents...", "scanning")
+
         results = await orchestrator.run_scan(target, job_id)
+
         logger.info(f"[BACKGROUND TASK] Orchestrator finished. Results keys: {list(results.keys())}")
         logger.info(f"[BACKGROUND TASK] Results status: {results.get('status')}, findings count: {len(results.get('findings', []))}")
 
         # Store findings
         findings_count = len(results.get('findings', []))
         logger.info(f"[BACKGROUND TASK] Storing {findings_count} findings to database")
+        append_scan_log(db, job_id, "INFO", f"📊 Scan completed. Processing {findings_count} findings...", "processing")
 
         for idx, finding_data in enumerate(results.get('findings', [])):
             logger.debug(f"[BACKGROUND TASK] Storing finding {idx+1}/{findings_count}: {finding_data.get('title', 'Unknown')}")
@@ -487,12 +523,21 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
         job.high_count = results.get('high_findings', 0)
 
         db.commit()
+
+        # Final log
+        severity_summary = f"Critical: {job.critical_count}, High: {job.high_count}"
+        append_scan_log(db, job_id, "SUCCESS", f"✅ Scan completed! Total findings: {job.total_findings} ({severity_summary})", "completed")
+
         logger.info(f"[BACKGROUND TASK] Job {job_id} completed successfully. Total findings: {job.total_findings}, Critical: {job.critical_count}, High: {job.high_count}")
 
     except Exception as e:
         logger.error(f"[BACKGROUND TASK] Job {job_id} failed with exception: {e}")
         import traceback
-        logger.error(f"[BACKGROUND TASK] Traceback:\n{traceback.format_exc()}")
+        error_trace = traceback.format_exc()
+        logger.error(f"[BACKGROUND TASK] Traceback:\n{error_trace}")
+
+        append_scan_log(db, job_id, "ERROR", f"❌ Scan failed: {str(e)}", "error")
+
         job.status = JobStatus.FAILED
         db.commit()
     finally:
@@ -779,6 +824,37 @@ async def get_scan_status(
     logger.info(f"[STATUS RESPONSE] Job {job_id}: Status={job.status.value}, Findings={len(formatted_findings)}, Response keys={list(response.keys())}")
 
     return response
+
+
+@app.get("/scan/{job_id}/logs")
+async def get_scan_logs(
+    job_id: str,
+    auth: tuple = Depends(verify_user_or_api_key),
+    db: Session = Depends(get_db)
+):
+    """Get execution logs for a scan (supports JWT or API key auth)"""
+    org, user = auth
+
+    logger.info(f"[LOGS REQUEST] Job ID: {job_id}, Org: {org.id}")
+
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        logger.warning(f"[LOGS] Job {job_id} not found for org {org.id}")
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    logger.info(f"[LOGS] Job {job_id} found, returning {len(job.execution_logs or [])} log entries")
+
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "target": job.target,
+        "logs": job.execution_logs or [],
+        "log_count": len(job.execution_logs or [])
+    }
 
 
 @app.get("/scan/{job_id}/agent-graph")

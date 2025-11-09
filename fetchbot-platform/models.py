@@ -96,28 +96,31 @@ class Severity(enum.Enum):
 class PentestJob(Base):
     """Penetration test job"""
     __tablename__ = 'pentest_jobs'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     organization_id = Column(String(36), ForeignKey('organizations.id'), nullable=False)
-    
+
     name = Column(String(255), nullable=False)
     target = Column(String(500), nullable=False)
     status = Column(Enum(JobStatus), default=JobStatus.QUEUED)
-    
+
     attack_ip = Column(String(45))
-    
+
     total_findings = Column(Integer, default=0)
     critical_count = Column(Integer, default=0)
     high_count = Column(Integer, default=0)
     medium_count = Column(Integer, default=0)
     low_count = Column(Integer, default=0)
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
-    
+
     report_url = Column(String(500))
-    
+
+    # Execution logs - stores step-by-step scan progress
+    execution_logs = Column(JSON, default=list)
+
     organization = relationship("Organization", back_populates="pentest_jobs")
     findings = relationship("Finding", back_populates="pentest_job")
 
