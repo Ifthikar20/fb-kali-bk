@@ -63,6 +63,10 @@ class PentestJobCreate(BaseModel):
     target: str
     mode: str = "discovery"
 
+class ScanCreate(BaseModel):
+    target: str
+    organization_id: Optional[int] = None
+
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security), 
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
@@ -147,7 +151,11 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
         else:
             orchestrator = OrchestratorClass(org_elastic_ip)
 
-        results = await orchestrator.execute_pentest(target)
+        # Call the correct method based on orchestrator type
+        if USE_DYNAMIC_AGENTS:
+            results = await orchestrator.run_scan(target, job_id)
+        else:
+            results = await orchestrator.execute_pentest(target)
         
         for finding_data in results['findings']:
             finding = Finding(
@@ -174,6 +182,58 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
         
     except Exception as e:
         print(f"[JOB] Failed: {e}")
+        job.status = JobStatus.FAILED
+        db.commit()
+    finally:
+        db.close()
+
+async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url: str):
+    """Background task to run dynamic agent scan"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(db_url)
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+
+    try:
+        job = db.query(PentestJob).filter(PentestJob.id == job_id).first()
+        job.status = JobStatus.RUNNING
+        job.started_at = datetime.utcnow()
+        db.commit()
+
+        # Create dynamic orchestrator
+        orchestrator = OrchestratorClass(org_elastic_ip)
+
+        # Run dynamic scan
+        results = await orchestrator.run_scan(target, job_id)
+
+        # Store findings
+        for finding_data in results.get('findings', []):
+            finding = Finding(
+                pentest_job_id=job_id,
+                title=finding_data.get('title', 'Unknown'),
+                description=finding_data.get('description', ''),
+                severity=finding_data.get('severity', 'info'),
+                vulnerability_type=finding_data.get('type', 'unknown'),
+                url=finding_data.get('affected_url') or finding_data.get('url'),
+                payload=finding_data.get('payload'),
+                discovered_by=finding_data.get('discovered_by', 'Dynamic Agent')
+            )
+            db.add(finding)
+
+        job.status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
+        job.completed_at = datetime.utcnow()
+        job.total_findings = results.get('total_findings', len(results.get('findings', [])))
+        job.critical_count = results.get('critical_findings', 0)
+        job.high_count = results.get('high_findings', 0)
+
+        db.commit()
+
+    except Exception as e:
+        print(f"[DYNAMIC SCAN] Failed: {e}")
+        import traceback
+        traceback.print_exc()
         job.status = JobStatus.FAILED
         db.commit()
     finally:
@@ -338,6 +398,143 @@ async def get_job_report(
     elif format == 'markdown':
         md_report = generator.generate_markdown_report(pentest_data)
         return PlainTextResponse(content=md_report, media_type="text/markdown")
+
+@app.post("/scan")
+async def start_dynamic_scan(
+    scan_data: ScanCreate,
+    background_tasks: BackgroundTasks,
+    org: Organization = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """Start a dynamic multi-agent security scan"""
+    from config import get_settings
+    settings = get_settings()
+
+    # Create job with generic name
+    job = PentestJob(
+        organization_id=org.id,
+        name=f"Dynamic Scan - {scan_data.target}",
+        target=scan_data.target,
+        attack_ip=org.elastic_ip,
+        status=JobStatus.QUEUED
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    # Start dynamic scan in background
+    background_tasks.add_task(
+        run_dynamic_scan,
+        job.id,
+        org.elastic_ip,
+        scan_data.target,
+        settings.database_url
+    )
+
+    return {
+        "job_id": job.id,
+        "status": job.status.value,
+        "message": "Dynamic security assessment started",
+        "target": scan_data.target
+    }
+
+
+@app.get("/scan/{job_id}")
+async def get_scan_status(
+    job_id: str,
+    org: Organization = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """Get scan status with findings"""
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Get findings
+    findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
+
+    # Format findings
+    formatted_findings = [
+        {
+            "title": f.title,
+            "severity": f.severity.value,
+            "type": f.vulnerability_type,
+            "description": f.description,
+            "discovered_by": f.discovered_by,
+            "payload": f.payload,
+            "evidence": f.poc_code,
+            "url": f.url
+        }
+        for f in findings
+    ]
+
+    # Calculate execution time
+    execution_time = None
+    if job.started_at and job.completed_at:
+        execution_time = (job.completed_at - job.started_at).total_seconds()
+    elif job.started_at:
+        execution_time = (datetime.utcnow() - job.started_at).total_seconds()
+
+    response = {
+        "job_id": job.id,
+        "status": job.status.value,
+        "target": job.target,
+        "findings": formatted_findings,
+        "total_findings": job.total_findings or len(findings),
+        "critical_findings": job.critical_count or 0,
+        "high_findings": job.high_count or 0
+    }
+
+    if execution_time is not None:
+        response["execution_time_seconds"] = execution_time
+
+    # Add agent info placeholder (will be populated from agent graph)
+    if job.status.value in ["completed", "running"]:
+        response["agents_created"] = []  # Frontend should call /scan/{job_id}/agent-graph for details
+
+    return response
+
+
+@app.get("/scan/{job_id}/agent-graph")
+async def get_agent_graph(
+    job_id: str,
+    org: Organization = Depends(verify_api_key),
+    db: Session = Depends(get_db)
+):
+    """Get agent hierarchy graph for visualization"""
+    # Verify job exists and belongs to organization
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Get agent graph from dynamic orchestrator
+    if not USE_DYNAMIC_AGENTS:
+        return {
+            "job_id": job_id,
+            "message": "Agent graph only available for dynamic scans",
+            "graph": {"nodes": [], "edges": []}
+        }
+
+    try:
+        orchestrator = OrchestratorClass(org.elastic_ip)
+        graph_data = await orchestrator.get_agent_graph(job_id)
+        return graph_data
+    except Exception as e:
+        return {
+            "job_id": job_id,
+            "error": str(e),
+            "graph": {"nodes": [], "edges": []}
+        }
+
 
 @app.get("/health")
 async def health_check():
