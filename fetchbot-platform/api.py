@@ -779,6 +779,123 @@ async def get_agent_graph(
         }
 
 
+@app.get("/scans")
+async def list_scans(
+    organization_id: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """List all scans for authenticated user/organization with pagination"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Query scans for the organization
+    query = db.query(PentestJob).filter(PentestJob.organization_id == org.id)
+
+    # Get total count
+    total = query.count()
+
+    # Apply pagination
+    scans = query.order_by(PentestJob.created_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "scans": [
+            {
+                "id": scan.id,
+                "name": scan.name,
+                "target": scan.target,
+                "status": scan.status.value,
+                "created_at": scan.created_at.isoformat() if scan.created_at else None,
+                "started_at": scan.started_at.isoformat() if scan.started_at else None,
+                "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+                "total_findings": scan.total_findings,
+                "critical_count": scan.critical_count,
+                "high_count": scan.high_count,
+                "medium_count": scan.medium_count,
+                "low_count": scan.low_count
+            }
+            for scan in scans
+        ]
+    }
+
+
+@app.get("/findings")
+async def list_findings(
+    status: Optional[List[str]] = None,
+    severity: Optional[List[str]] = None,
+    scan_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """List all findings for authenticated user/organization with filtering"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Start with base query - join with PentestJob to filter by organization
+    query = db.query(Finding).join(PentestJob).filter(PentestJob.organization_id == org.id)
+
+    # Apply filters
+    if scan_id:
+        query = query.filter(Finding.pentest_job_id == scan_id)
+
+    if severity:
+        # Convert severity strings to enum values
+        from models import Severity
+        severity_enums = []
+        for s in severity:
+            try:
+                severity_enums.append(Severity[s.upper()])
+            except KeyError:
+                pass
+        if severity_enums:
+            query = query.filter(Finding.severity.in_(severity_enums))
+
+    # Note: "status" filter on findings doesn't exist in current model
+    # If you want to filter by scan status instead:
+    if status:
+        from models import JobStatus
+        status_enums = []
+        for s in status:
+            try:
+                status_enums.append(JobStatus[s.upper()])
+            except KeyError:
+                pass
+        if status_enums:
+            query = query.filter(PentestJob.status.in_(status_enums))
+
+    # Get total count
+    total = query.count()
+
+    # Apply pagination
+    findings = query.order_by(Finding.discovered_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "findings": [
+            {
+                "id": finding.id,
+                "pentest_job_id": finding.pentest_job_id,
+                "title": finding.title,
+                "description": finding.description,
+                "severity": finding.severity.value,
+                "vulnerability_type": finding.vulnerability_type,
+                "url": finding.url,
+                "payload": finding.payload,
+                "discovered_by": finding.discovered_by,
+                "discovered_at": finding.discovered_at.isoformat() if finding.discovered_at else None
+            }
+            for finding in findings
+        ]
+    }
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "platform": "FetchBot.ai"}
