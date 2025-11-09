@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # AI (Required for Claude orchestration)
     anthropic_api_key: str
 
+    # Orchestrator Configuration
+    use_dynamic_agents: bool = False
+    num_kali_agents: Optional[int] = None
+
     # Security
     jwt_secret: str = "dev_secret_change_in_production"
 
