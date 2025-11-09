@@ -45,8 +45,9 @@ def parse_tool_invocations(content: str) -> List[Dict[str, Any]]:
 
         args = {}
 
-        # Try Format 1: <parameter=name>value</parameter>
-        param_pattern = r'<parameter=([^>]+)>(.*?)</parameter>'
+        # Try Format 1: <parameter=name>value</parameter> or <parameter=name>value</parameter=name>
+        # Claude sometimes uses malformed closing tags like </parameter=name> instead of </parameter>
+        param_pattern = r'<parameter=([^>]+)>(.*?)</parameter(?:=[^>]+)?>'
         param_matches = re.finditer(param_pattern, function_body, re.DOTALL)
 
         for param_match in param_matches:
