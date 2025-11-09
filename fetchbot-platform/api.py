@@ -100,56 +100,7 @@ class ScanCreate(BaseModel):
     target: str
     organization_id: Optional[int] = None
 
-class UserRegister(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-    full_name: Optional[str] = None
-    organization_id: str  # Users must belong to an organization
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    user_id: str
-    username: str
-    organization_id: str
-
-# JWT Helper Functions
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    """Create JWT access token"""
-    settings = get_settings()
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(days=7)  # Default 7 days
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret, algorithm="HS256")
-    return encoded_jwt
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security),
-                 db: Session = Depends(get_db)) -> User:
-    """Verify JWT token and return user"""
-    settings = get_settings()
-    token = credentials.credentials
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.active:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-    return user
-
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security), 
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
     api_key = credentials.credentials
@@ -427,38 +378,10 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
     finally:
         db.close()
 
-def append_scan_log(db: Session, job_id: str, level: str, message: str, step: str = None):
-    """Helper to append log entry to scan job"""
-    try:
-        job = db.query(PentestJob).filter(PentestJob.id == job_id).first()
-        if job:
-            if job.execution_logs is None:
-                job.execution_logs = []
-
-            log_entry = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "level": level,
-                "message": message
-            }
-            if step:
-                log_entry["step"] = step
-
-            # Append to existing logs
-            logs = job.execution_logs.copy() if job.execution_logs else []
-            logs.append(log_entry)
-            job.execution_logs = logs
-
-            db.commit()
-    except Exception as e:
-        logger.error(f"Failed to append log to job {job_id}: {e}")
-
-
 async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url: str):
     """Background task to run dynamic agent scan"""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
-
-    logger.info(f"[BACKGROUND TASK] Starting dynamic scan for job {job_id}, target: {target}")
 
     engine = create_engine(db_url)
     SessionLocal = sessionmaker(bind=engine)
@@ -466,41 +389,18 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
 
     try:
         job = db.query(PentestJob).filter(PentestJob.id == job_id).first()
-        if not job:
-            logger.error(f"[BACKGROUND TASK] Job {job_id} not found in database!")
-            return
-
-        logger.info(f"[BACKGROUND TASK] Job {job_id} found, setting status to RUNNING")
-
-        # Initialize logs
-        job.execution_logs = []
-        append_scan_log(db, job_id, "INFO", f"🚀 Starting security scan for {target}", "initialization")
-
         job.status = JobStatus.RUNNING
         job.started_at = datetime.utcnow()
         db.commit()
 
         # Create dynamic orchestrator
-        logger.info(f"[BACKGROUND TASK] Creating orchestrator for IP: {org_elastic_ip}")
-        append_scan_log(db, job_id, "INFO", f"🤖 Initializing AI orchestrator (Attack IP: {org_elastic_ip})", "orchestrator")
         orchestrator = OrchestratorClass(org_elastic_ip)
 
         # Run dynamic scan
-        logger.info(f"[BACKGROUND TASK] Starting orchestrator.run_scan() for {target}")
-        append_scan_log(db, job_id, "INFO", "🔍 Launching dynamic security agents...", "scanning")
-
         results = await orchestrator.run_scan(target, job_id)
 
-        logger.info(f"[BACKGROUND TASK] Orchestrator finished. Results keys: {list(results.keys())}")
-        logger.info(f"[BACKGROUND TASK] Results status: {results.get('status')}, findings count: {len(results.get('findings', []))}")
-
         # Store findings
-        findings_count = len(results.get('findings', []))
-        logger.info(f"[BACKGROUND TASK] Storing {findings_count} findings to database")
-        append_scan_log(db, job_id, "INFO", f"📊 Scan completed. Processing {findings_count} findings...", "processing")
-
-        for idx, finding_data in enumerate(results.get('findings', [])):
-            logger.debug(f"[BACKGROUND TASK] Storing finding {idx+1}/{findings_count}: {finding_data.get('title', 'Unknown')}")
+        for finding_data in results.get('findings', []):
             finding = Finding(
                 pentest_job_id=job_id,
                 title=finding_data.get('title', 'Unknown'),
@@ -513,10 +413,7 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
             )
             db.add(finding)
 
-        final_status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
-        logger.info(f"[BACKGROUND TASK] Setting job status to {final_status.value}")
-
-        job.status = final_status
+        job.status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
         job.completed_at = datetime.utcnow()
         job.total_findings = results.get('total_findings', len(results.get('findings', [])))
         job.critical_count = results.get('critical_findings', 0)
@@ -524,25 +421,14 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
 
         db.commit()
 
-        # Final log
-        severity_summary = f"Critical: {job.critical_count}, High: {job.high_count}"
-        append_scan_log(db, job_id, "SUCCESS", f"✅ Scan completed! Total findings: {job.total_findings} ({severity_summary})", "completed")
-
-        logger.info(f"[BACKGROUND TASK] Job {job_id} completed successfully. Total findings: {job.total_findings}, Critical: {job.critical_count}, High: {job.high_count}")
-
     except Exception as e:
-        logger.error(f"[BACKGROUND TASK] Job {job_id} failed with exception: {e}")
+        print(f"[DYNAMIC SCAN] Failed: {e}")
         import traceback
-        error_trace = traceback.format_exc()
-        logger.error(f"[BACKGROUND TASK] Traceback:\n{error_trace}")
-
-        append_scan_log(db, job_id, "ERROR", f"❌ Scan failed: {str(e)}", "error")
-
+        traceback.print_exc()
         job.status = JobStatus.FAILED
         db.commit()
     finally:
         db.close()
-        logger.info(f"[BACKGROUND TASK] Database connection closed for job {job_id}")
 
 @app.post("/api/pentest")
 async def create_pentest_job(
@@ -708,16 +594,12 @@ async def get_job_report(
 async def start_dynamic_scan(
     scan_data: ScanCreate,
     background_tasks: BackgroundTasks,
-    auth: tuple = Depends(verify_user_or_api_key),
+    org: Organization = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
-    """Start a dynamic multi-agent security scan (supports JWT or API key auth)"""
+    """Start a dynamic multi-agent security scan"""
     from config import get_settings
     settings = get_settings()
-
-    org, user = auth  # Unpack organization and optional user
-
-    logger.info(f"[SCAN START] Target: {scan_data.target}, Org: {org.id}, User: {user.id if user else 'API Key'}")
 
     # Create job with generic name
     job = PentestJob(
@@ -732,8 +614,6 @@ async def start_dynamic_scan(
     db.commit()
     db.refresh(job)
 
-    logger.info(f"[SCAN CREATED] Job ID: {job.id}, Status: {job.status.value}")
-
     # Start dynamic scan in background
     background_tasks.add_task(
         run_dynamic_scan,
@@ -743,44 +623,31 @@ async def start_dynamic_scan(
         settings.database_url
     )
 
-    logger.info(f"[SCAN QUEUED] Background task started for job {job.id}")
-
-    response = {
+    return {
         "job_id": job.id,
         "status": job.status.value,
         "message": "Dynamic security assessment started",
         "target": scan_data.target
     }
 
-    logger.info(f"[SCAN RESPONSE] Returning: {response}")
-    return response
-
 
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
+    org: Organization = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
-    """Get scan status with findings (supports JWT or API key auth)"""
-    org, user = auth
-
-    logger.info(f"[STATUS REQUEST] Job ID: {job_id}, Org: {org.id}")
-
+    """Get scan status with findings"""
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
     ).first()
 
     if not job:
-        logger.warning(f"[STATUS] Job {job_id} not found for org {org.id}")
         raise HTTPException(status_code=404, detail="Scan not found")
-
-    logger.info(f"[STATUS] Job {job_id} found - Status: {job.status.value}, Findings: {job.total_findings or 0}")
 
     # Get findings
     findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
-    logger.info(f"[STATUS] Retrieved {len(findings)} findings from database")
 
     # Format findings
     formatted_findings = [
@@ -821,53 +688,16 @@ async def get_scan_status(
     if job.status.value in ["completed", "running"]:
         response["agents_created"] = []  # Frontend should call /scan/{job_id}/agent-graph for details
 
-    logger.info(f"[STATUS RESPONSE] Job {job_id}: Status={job.status.value}, Findings={len(formatted_findings)}, Response keys={list(response.keys())}")
-
     return response
-
-
-@app.get("/scan/{job_id}/logs")
-async def get_scan_logs(
-    job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
-    db: Session = Depends(get_db)
-):
-    """Get execution logs for a scan (supports JWT or API key auth)"""
-    org, user = auth
-
-    logger.info(f"[LOGS REQUEST] Job ID: {job_id}, Org: {org.id}")
-
-    job = db.query(PentestJob).filter(
-        PentestJob.id == job_id,
-        PentestJob.organization_id == org.id
-    ).first()
-
-    if not job:
-        logger.warning(f"[LOGS] Job {job_id} not found for org {org.id}")
-        raise HTTPException(status_code=404, detail="Scan not found")
-
-    logger.info(f"[LOGS] Job {job_id} found, returning {len(job.execution_logs or [])} log entries")
-
-    return {
-        "job_id": job.id,
-        "status": job.status.value,
-        "target": job.target,
-        "logs": job.execution_logs or [],
-        "log_count": len(job.execution_logs or [])
-    }
 
 
 @app.get("/scan/{job_id}/agent-graph")
 async def get_agent_graph(
     job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
+    org: Organization = Depends(verify_api_key),
     db: Session = Depends(get_db)
 ):
-    """Get agent hierarchy graph for visualization (supports JWT or API key auth)"""
-    org, user = auth
-
-    logger.info(f"[AGENT GRAPH] Request for job {job_id}, org: {org.id}")
-
+    """Get agent hierarchy graph for visualization"""
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -875,14 +705,10 @@ async def get_agent_graph(
     ).first()
 
     if not job:
-        logger.warning(f"[AGENT GRAPH] Job {job_id} not found for org {org.id}")
         raise HTTPException(status_code=404, detail="Scan not found")
-
-    logger.info(f"[AGENT GRAPH] Job {job_id} found, dynamic agents enabled: {USE_DYNAMIC_AGENTS}")
 
     # Get agent graph from dynamic orchestrator
     if not USE_DYNAMIC_AGENTS:
-        logger.info(f"[AGENT GRAPH] Dynamic agents not enabled, returning empty graph")
         return {
             "job_id": job_id,
             "message": "Agent graph only available for dynamic scans",
@@ -890,106 +716,15 @@ async def get_agent_graph(
         }
 
     try:
-        logger.info(f"[AGENT GRAPH] Fetching graph from orchestrator for job {job_id}")
         orchestrator = OrchestratorClass(org.elastic_ip)
         graph_data = await orchestrator.get_agent_graph(job_id)
-        logger.info(f"[AGENT GRAPH] Successfully retrieved graph with {len(graph_data.get('graph', {}).get('nodes', []))} nodes")
         return graph_data
     except Exception as e:
-        logger.error(f"[AGENT GRAPH] Error retrieving graph for job {job_id}: {e}")
-        import traceback
-        logger.error(f"[AGENT GRAPH] Traceback:\n{traceback.format_exc()}")
         return {
             "job_id": job_id,
             "error": str(e),
             "graph": {"nodes": [], "edges": []}
         }
-
-
-@app.get("/scans")
-async def list_scans(
-    auth: tuple = Depends(verify_user_or_api_key),
-    limit: int = 20,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
-    """List all scans for user's organization (supports JWT or API key auth)"""
-    org, user = auth
-
-    logger.info(f"[LIST SCANS] Request for org {org.id}, limit={limit}, offset={offset}")
-
-    # Query scans for this organization
-    scans_query = db.query(PentestJob).filter(
-        PentestJob.organization_id == org.id
-    ).order_by(PentestJob.created_at.desc())
-
-    # Get total count
-    total = scans_query.count()
-    logger.info(f"[LIST SCANS] Found {total} total scans for org {org.id}")
-
-    # Apply pagination
-    scans = scans_query.limit(limit).offset(offset).all()
-    logger.info(f"[LIST SCANS] Returning {len(scans)} scans (page offset={offset})")
-
-    # Format response
-    scan_list = [
-        {
-            "job_id": scan.id,
-            "target": scan.target,
-            "status": scan.status.value,
-            "created_at": scan.created_at.isoformat() if scan.created_at else None,
-            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
-            "total_findings": scan.total_findings or 0,
-            "critical_findings": scan.critical_count or 0,
-            "high_findings": scan.high_count or 0
-        }
-        for scan in scans
-    ]
-
-    logger.info(f"[LIST SCANS] Response prepared with {len(scan_list)} scans")
-
-    return {
-        "scans": scan_list,
-        "total": total,
-        "limit": limit,
-        "offset": offset
-    }
-
-
-@app.delete("/scan/{job_id}")
-async def delete_scan(
-    job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
-    db: Session = Depends(get_db)
-):
-    """Delete a scan (supports JWT or API key auth)"""
-    org, user = auth
-
-    logger.info(f"[DELETE SCAN] Request to delete job {job_id} for org {org.id}")
-
-    # Find the scan
-    scan = db.query(PentestJob).filter(
-        PentestJob.id == job_id,
-        PentestJob.organization_id == org.id
-    ).first()
-
-    if not scan:
-        logger.warning(f"[DELETE SCAN] Job {job_id} not found for org {org.id}")
-        raise HTTPException(status_code=404, detail="Scan not found")
-
-    logger.info(f"[DELETE SCAN] Job {job_id} found, target: {scan.target}, status: {scan.status.value}")
-
-    # Delete associated findings first
-    findings_deleted = db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
-    logger.info(f"[DELETE SCAN] Deleted {findings_deleted} findings for job {job_id}")
-
-    # Delete the scan
-    db.delete(scan)
-    db.commit()
-
-    logger.info(f"[DELETE SCAN] Job {job_id} deleted successfully")
-
-    return {"message": "Scan deleted successfully"}
 
 
 @app.get("/health")
