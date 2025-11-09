@@ -560,6 +560,100 @@ class KaliAgent:
 # Create agent instance
 agent = KaliAgent(AGENT_ID)
 
+class ToolExecutionRequest(BaseModel):
+    tool_name: str
+    parameters: Dict
+
+@app.post("/execute_tool")
+async def execute_tool(request: ToolExecutionRequest):
+    """Execute individual security tool"""
+    tool_name = request.tool_name
+    params = request.parameters
+
+    print(f"[{AGENT_ID}] Executing tool: {tool_name} with params: {params}")
+
+    try:
+        # Map tool names to agent methods
+        if tool_name == "nmap_scan":
+            target = params.get("target")
+            findings = await agent._network_scan(target, "quick")
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "http_scan":
+            target = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._detect_technologies(client, target)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "dns_enumerate":
+            target = params.get("domain") or params.get("target")
+            findings = await agent._dns_enumeration(target)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "security_headers_check":
+            url = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._check_security_headers(client, url)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "javascript_analysis":
+            # Simplified - return empty for now
+            return {"success": True, "findings": []}
+
+        elif tool_name == "sql_injection_test":
+            url = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._test_sql_injection(client, url, "quick")
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "xss_test":
+            url = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._test_xss(client, url)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "directory_enumeration":
+            url = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._enumerate_directories(client, url)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "nikto_scan":
+            target = params.get("target") or params.get("url")
+            findings = await agent._run_nikto(target)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "scan_env_files":
+            url = params.get("url") or params.get("target")
+            async with httpx.AsyncClient() as client:
+                findings = await agent._check_sensitive_files(client, url)
+            return {"success": True, "findings": findings}
+
+        elif tool_name == "api_brute_force" or tool_name == "api_fuzzing":
+            # Return empty for now - these are advanced tools
+            return {"success": True, "findings": []}
+
+        elif tool_name == "service_detection":
+            target = params.get("target")
+            findings = await agent._network_scan(target, "quick")
+            return {"success": True, "findings": findings}
+
+        else:
+            print(f"[{AGENT_ID}] Unknown tool: {tool_name}")
+            return {
+                "success": False,
+                "error": f"Unknown tool: {tool_name}",
+                "findings": []
+            }
+
+    except Exception as e:
+        print(f"[{AGENT_ID}] Tool execution error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "findings": []
+        }
+
 @app.post("/scan")
 async def execute_scan(request: ScanRequest):
     """Execute security scan"""
