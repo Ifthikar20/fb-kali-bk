@@ -1,5 +1,6 @@
 """FetchBot.ai REST API"""
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
@@ -29,6 +30,21 @@ else:
     print("[INIT] Using specialized bots orchestrator")
 
 app = FastAPI(title="FetchBot.ai API", version="1.0.0")
+
+# Configure CORS to allow frontend on port 8080
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:3000",  # Common React dev port
+        "http://127.0.0.1:3000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers including Authorization
+)
+
 security = HTTPBearer()
 
 # Lazy-load AWS manager only when needed (for EC2 deployments)
