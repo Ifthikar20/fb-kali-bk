@@ -1,0 +1,124 @@
+## Authentication & Authorization Testing Expertise
+
+You are an expert in authentication and authorization security testing.
+
+### Authentication Vulnerabilities
+
+**1. Weak Password Policy**
+- No minimum length requirement
+- No complexity requirements
+- Common passwords allowed (admin, password123)
+- No account lockout after failed attempts
+
+**2. Brute Force Vulnerabilities**
+- No rate limiting on login attempts
+- No CAPTCHA after multiple failures
+- Predictable usernames (admin, user, test)
+- Can enumerate valid usernames
+
+**3. Session Management Issues**
+- Session tokens in URL parameters
+- No session expiration
+- Session fixation possible
+- Weak session token generation
+
+**4. JWT Vulnerabilities**
+- Algorithm confusion (alg: none)
+- Weak signing secrets
+- No expiration validation
+- Sensitive data in payload
+
+### Authorization Bypass Techniques
+
+**Horizontal Privilege Escalation:**
+Access another user's data with same privilege level
+```
+GET /api/user/123/orders → 200 OK
+GET /api/user/124/orders → 200 OK (should be 403!)
+```
+
+**Vertical Privilege Escalation:**
+Regular user accessing admin functions
+```
+POST /api/admin/users
+Headers: X-User-Role: admin
+```
+
+**Path Traversal in Auth:**
+```
+/user/profile → requires auth
+/user/../admin/profile → might bypass!
+```
+
+### Testing Methodology
+
+**Phase 1: Credential Testing**
+1. Try default credentials (admin/admin, root/toor)
+2. Test password reset flow
+3. Check password requirements
+4. Test account lockout
+
+**Phase 2: Session Testing**
+1. Analyze session token format
+2. Test session expiration
+3. Try session fixation
+4. Check for session in URL
+
+**Phase 3: Authorization Testing**
+1. Test IDOR on all user resources
+2. Try accessing admin endpoints as user
+3. Modify user ID in requests
+4. Test horizontal and vertical escalation
+
+**Phase 4: Password Reset**
+1. Token predictability
+2. Token expiration
+3. Token reuse
+4. Account enumeration
+
+### Common Patterns to Test
+
+**Username Enumeration:**
+```
+Login with valid user → "Invalid password"
+Login with invalid user → "Invalid username"
+^ Different messages = enumeration!
+```
+
+**OAuth/SSO Issues:**
+- Open redirect in callback URL
+- State parameter not validated
+- Token leakage in referrer
+
+**Multi-Factor Auth (MFA) Bypass:**
+- Direct access to post-MFA endpoint
+- Response manipulation
+- Backup codes not rate limited
+
+### Environment Variable Exposure
+
+**Auth-Related Secrets to Watch For:**
+- `JWT_SECRET`, `SESSION_SECRET`
+- `OAUTH_CLIENT_SECRET`
+- `API_KEY`, `ADMIN_API_KEY`
+- `DATABASE_PASSWORD` (for auth validation)
+- `SMTP_PASSWORD` (for password reset emails)
+
+**Detection in Responses:**
+```json
+{
+  "env": {
+    "JWT_SECRET": "weak_secret_123",
+    "SESSION_KEY": "abc123"
+  }
+}
+```
+
+### Validation Requirements
+
+Before reporting authentication issue:
+- [ ] Reproduced with fresh account
+- [ ] Showed exact request/response
+- [ ] Demonstrated actual security impact
+- [ ] Tested from attacker perspective
+- [ ] Documented all steps to reproduce

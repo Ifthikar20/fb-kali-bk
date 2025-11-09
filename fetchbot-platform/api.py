@@ -12,9 +12,14 @@ from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
 from config import get_settings
 
 # Detect which orchestrator to use based on environment
+USE_DYNAMIC_AGENTS = os.environ.get('USE_DYNAMIC_AGENTS', 'false').lower() == 'true'
 USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
 
-if USE_MULTI_KALI:
+if USE_DYNAMIC_AGENTS:
+    from core.orchestrator import DynamicOrchestrator as OrchestratorClass
+    NUM_AGENTS = 0
+    print("[INIT] ✨ Using DYNAMIC MULTI-AGENT orchestrator (AI-driven agent creation)")
+elif USE_MULTI_KALI:
     from multi_kali_orchestrator import MultiKaliOrchestrator as OrchestratorClass
     NUM_AGENTS = int(USE_MULTI_KALI)
     print(f"[INIT] Using Multi-Kali orchestrator with {NUM_AGENTS} agents")
