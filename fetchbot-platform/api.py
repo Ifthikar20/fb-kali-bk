@@ -739,6 +739,78 @@ async def get_agent_graph(
         }
 
 
+@app.get("/scans")
+async def list_scans(
+    auth: tuple = Depends(verify_user_or_api_key),
+    limit: int = 20,
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    """List all scans for user's organization (supports JWT or API key auth)"""
+    org, user = auth
+
+    # Query scans for this organization
+    scans_query = db.query(PentestJob).filter(
+        PentestJob.organization_id == org.id
+    ).order_by(PentestJob.created_at.desc())
+
+    # Get total count
+    total = scans_query.count()
+
+    # Apply pagination
+    scans = scans_query.limit(limit).offset(offset).all()
+
+    # Format response
+    scan_list = [
+        {
+            "job_id": scan.id,
+            "target": scan.target,
+            "status": scan.status.value,
+            "created_at": scan.created_at.isoformat() if scan.created_at else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "total_findings": scan.total_findings or 0,
+            "critical_findings": scan.critical_count or 0,
+            "high_findings": scan.high_count or 0
+        }
+        for scan in scans
+    ]
+
+    return {
+        "scans": scan_list,
+        "total": total,
+        "limit": limit,
+        "offset": offset
+    }
+
+
+@app.delete("/scan/{job_id}")
+async def delete_scan(
+    job_id: str,
+    auth: tuple = Depends(verify_user_or_api_key),
+    db: Session = Depends(get_db)
+):
+    """Delete a scan (supports JWT or API key auth)"""
+    org, user = auth
+
+    # Find the scan
+    scan = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Delete associated findings first
+    db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
+
+    # Delete the scan
+    db.delete(scan)
+    db.commit()
+
+    return {"message": "Scan deleted successfully"}
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "platform": "FetchBot.ai"}
