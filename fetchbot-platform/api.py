@@ -1,15 +1,25 @@
 """FetchBot.ai REST API"""
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
 import asyncio
 import os
+import logging
 
-from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
+from models import Organization, PentestJob, Finding, User, JobStatus, init_db, get_db
 from config import get_settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Detect which orchestrator to use based on environment
 USE_DYNAMIC_AGENTS = os.environ.get('USE_DYNAMIC_AGENTS', 'false').lower() == 'true'
@@ -29,6 +39,21 @@ else:
     print("[INIT] Using specialized bots orchestrator")
 
 app = FastAPI(title="FetchBot.ai API", version="1.0.0")
+
+# Configure CORS to allow frontend on port 8080
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:3000",  # Common React dev port
+        "http://127.0.0.1:3000"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers including Authorization
+)
+
 security = HTTPBearer()
 
 # Lazy-load AWS manager only when needed (for EC2 deployments)
@@ -53,6 +78,14 @@ def get_aws_manager():
 
 init_db()
 
+# Log startup information
+logger.info("=" * 80)
+logger.info("FetchBot.ai API Starting")
+logger.info(f"Dynamic Agents Enabled: {USE_DYNAMIC_AGENTS}")
+logger.info(f"Orchestrator: {OrchestratorClass.__name__}")
+logger.info(f"Logging Level: INFO")
+logger.info("=" * 80)
+
 class OrganizationCreate(BaseModel):
     name: str
     admin_email: EmailStr
@@ -76,49 +109,114 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
         raise HTTPException(status_code=401, detail="Invalid API key")
     return org
 
+def verify_user_or_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
+                            db: Session = Depends(get_db)) -> tuple[Organization, Optional[User]]:
+    """Verify either JWT token or API key, return (organization, user)"""
+    token = credentials.credentials
+    settings = get_settings()
+
+    # Try JWT token first
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id: str = payload.get("sub")
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and user.active:
+                org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+                if org:
+                    return org, user
+    except JWTError:
+        pass
+
+    # Try API key
+    org = db.query(Organization).filter(Organization.api_key == token).first()
+    if org and org.active:
+        return org, None
+
+    raise HTTPException(status_code=401, detail="Invalid credentials")
+
 @app.post("/api/organizations")
 async def create_organization(org_data: OrganizationCreate, db: Session = Depends(get_db)):
-    """Create organization with AWS EC2 instance"""
+    """Create organization with optional AWS EC2 instance"""
+    logger.info(f"[CREATE ORG] Creating organization: {org_data.name}, admin email: {org_data.admin_email}")
+
     slug = org_data.name.lower().replace(' ', '-')
-    
+
     existing = db.query(Organization).filter(Organization.slug == slug).first()
     if existing:
+        logger.warning(f"[CREATE ORG] Organization with slug '{slug}' already exists")
         raise HTTPException(status_code=400, detail="Organization exists")
-    
+
     org = Organization(
         name=org_data.name,
         slug=slug,
         admin_email=org_data.admin_email
     )
-    
+
     db.add(org)
     db.commit()
     db.refresh(org)
-    
-    try:
-        aws_manager = get_aws_manager()
-        infra = aws_manager.create_organization_infrastructure(org.name, org.id)
-        
-        org.ec2_instance_id = infra['instance_id']
-        org.elastic_ip = infra['elastic_ip']
-        org.elastic_ip_allocation_id = infra['allocation_id']
-        org.ec2_running = True
-        
+
+    logger.info(f"[CREATE ORG] Organization created in database: ID={org.id}, API Key={org.api_key[:15]}...")
+
+    # Try to create AWS infrastructure (optional for local testing)
+    settings = get_settings()
+    aws_enabled = settings.aws_access_key_id and settings.aws_secret_access_key and \
+                  settings.aws_access_key_id != "your_aws_access_key_id"
+
+    logger.info(f"[CREATE ORG] AWS enabled: {aws_enabled}")
+
+    if aws_enabled:
+        try:
+            logger.info(f"[CREATE ORG] Attempting to create AWS infrastructure for org {org.id}")
+            aws_manager = get_aws_manager()
+            infra = aws_manager.create_organization_infrastructure(org.name, org.id)
+
+            org.ec2_instance_id = infra['instance_id']
+            org.elastic_ip = infra['elastic_ip']
+            org.elastic_ip_allocation_id = infra['allocation_id']
+            org.ec2_running = True
+
+            db.commit()
+            db.refresh(org)
+
+            logger.info(f"[CREATE ORG] AWS infrastructure created successfully: IP={org.elastic_ip}, Instance={org.ec2_instance_id}")
+
+            return {
+                'id': org.id,
+                'name': org.name,
+                'api_key': org.api_key,
+                'elastic_ip': org.elastic_ip,
+                'ec2_instance_id': org.ec2_instance_id,
+                'mode': 'aws'
+            }
+
+        except Exception as e:
+            # AWS failed, but keep organization for local testing
+            logger.warning(f"[CREATE ORG] AWS infrastructure creation failed: {e}")
+            logger.info(f"[CREATE ORG] Falling back to local-only mode for org {org.id}")
+            org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
+            db.commit()
+            db.refresh(org)
+    else:
+        # No AWS configured - local testing mode
+        logger.info(f"[CREATE ORG] AWS not configured - creating org {org.id} in local-only mode")
+        org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
         db.commit()
         db.refresh(org)
-        
-        return {
-            'id': org.id,
-            'name': org.name,
-            'api_key': org.api_key,
-            'elastic_ip': org.elastic_ip,
-            'ec2_instance_id': org.ec2_instance_id
-        }
-        
-    except Exception as e:
-        db.delete(org)
-        db.commit()
-        raise HTTPException(status_code=500, detail=str(e))
+
+    response = {
+        'id': org.id,
+        'name': org.name,
+        'api_key': org.api_key,
+        'elastic_ip': org.elastic_ip,
+        'ec2_instance_id': org.ec2_instance_id,
+        'mode': 'local' if not aws_enabled else 'aws'
+    }
+
+    logger.info(f"[CREATE ORG] Organization {org.id} created successfully in {response['mode']} mode, IP: {org.elastic_ip}")
+
+    return response
 
 @app.get("/api/organizations/me")
 async def get_my_organization(org: Organization = Depends(verify_api_key)):
@@ -128,6 +226,99 @@ async def get_my_organization(org: Organization = Depends(verify_api_key)):
         'name': org.name,
         'elastic_ip': org.elastic_ip,
         'ec2_running': org.ec2_running
+    }
+
+@app.post("/api/register", response_model=Token)
+async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
+    """Register a new user"""
+    logger.info(f"[REGISTER] Registration attempt for username: {user_data.username}, email: {user_data.email}")
+
+    # Check if username exists
+    existing_user = db.query(User).filter(User.username == user_data.username).first()
+    if existing_user:
+        logger.warning(f"[REGISTER] Username '{user_data.username}' already exists")
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Check if email exists
+    existing_email = db.query(User).filter(User.email == user_data.email).first()
+    if existing_email:
+        logger.warning(f"[REGISTER] Email '{user_data.email}' already registered")
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Check if organization exists
+    org = db.query(Organization).filter(Organization.id == user_data.organization_id).first()
+    if not org:
+        logger.warning(f"[REGISTER] Organization {user_data.organization_id} not found")
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    # Create user
+    user = User(
+        username=user_data.username,
+        email=user_data.email,
+        full_name=user_data.full_name,
+        organization_id=user_data.organization_id
+    )
+    user.set_password(user_data.password)
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    logger.info(f"[REGISTER] User created successfully: {user.id}, username: {user.username}, org: {user.organization_id}")
+
+    # Create access token
+    access_token = create_access_token(data={"sub": user.id})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "username": user.username,
+        "organization_id": user.organization_id
+    }
+
+@app.post("/api/login", response_model=Token)
+async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
+    """Login user and return JWT token"""
+    logger.info(f"[LOGIN] Login attempt for username: {login_data.username}")
+
+    # Find user
+    user = db.query(User).filter(User.username == login_data.username).first()
+    if not user or not user.check_password(login_data.password):
+        logger.warning(f"[LOGIN] Failed login for username: {login_data.username} (invalid credentials)")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if not user.active:
+        logger.warning(f"[LOGIN] Failed login for username: {login_data.username} (account disabled)")
+        raise HTTPException(status_code=401, detail="User account is disabled")
+
+    # Update last login
+    user.last_login = datetime.utcnow()
+    db.commit()
+
+    logger.info(f"[LOGIN] Successful login for user: {user.id}, username: {user.username}, org: {user.organization_id}")
+
+    # Create access token
+    access_token = create_access_token(data={"sub": user.id})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "username": user.username,
+        "organization_id": user.organization_id
+    }
+
+@app.get("/api/me")
+async def get_current_user(user: User = Depends(verify_token)):
+    """Get current logged in user info"""
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "organization_id": user.organization_id,
+        "is_admin": user.is_admin
     }
 
 async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url: str):

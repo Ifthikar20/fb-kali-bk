@@ -6,6 +6,7 @@ from datetime import datetime
 import uuid
 import secrets
 import enum
+import hashlib
 
 Base = declarative_base()
 
@@ -44,6 +45,38 @@ class Organization(Base):
             self.api_key = f"fb_live_{secrets.token_urlsafe(48)}"
 
 
+class User(Base):
+    """User account for login"""
+    __tablename__ = 'users'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    organization_id = Column(String(36), ForeignKey('organizations.id'), nullable=False)
+
+    username = Column(String(100), nullable=False, unique=True)
+    email = Column(String(255), nullable=False, unique=True)
+    password_hash = Column(String(128), nullable=False)
+
+    # User info
+    full_name = Column(String(255))
+    is_admin = Column(Boolean, default=False)
+    active = Column(Boolean, default=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime)
+
+    # Relationship
+    organization = relationship("Organization")
+
+    def set_password(self, password: str):
+        """Hash and set password"""
+        self.password_hash = hashlib.sha256(password.encode()).hexdigest()
+
+    def check_password(self, password: str) -> bool:
+        """Verify password"""
+        return self.password_hash == hashlib.sha256(password.encode()).hexdigest()
+
+
 class JobStatus(enum.Enum):
     QUEUED = "queued"
     STARTING = "starting"
@@ -63,28 +96,31 @@ class Severity(enum.Enum):
 class PentestJob(Base):
     """Penetration test job"""
     __tablename__ = 'pentest_jobs'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     organization_id = Column(String(36), ForeignKey('organizations.id'), nullable=False)
-    
+
     name = Column(String(255), nullable=False)
     target = Column(String(500), nullable=False)
     status = Column(Enum(JobStatus), default=JobStatus.QUEUED)
-    
+
     attack_ip = Column(String(45))
-    
+
     total_findings = Column(Integer, default=0)
     critical_count = Column(Integer, default=0)
     high_count = Column(Integer, default=0)
     medium_count = Column(Integer, default=0)
     low_count = Column(Integer, default=0)
-    
+
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
-    
+
     report_url = Column(String(500))
-    
+
+    # Execution logs - stores step-by-step scan progress
+    execution_logs = Column(JSON, default=list)
+
     organization = relationship("Organization", back_populates="pentest_jobs")
     findings = relationship("Finding", back_populates="pentest_job")
 
