@@ -156,72 +156,93 @@ TARGET: {self.target}
 JOB ID: {self.job_id}
 
 YOUR MISSION:
-Conduct a thorough security assessment by creating and coordinating specialized agents.
+Conduct a thorough, adaptive security assessment by creating specialized agents based on what you discover.
 You do NOT perform scans directly - you delegate to specialized agents.
 
-STRATEGY:
+THINK LIKE A REAL PENTESTER:
 
-1. START WITH RECONNAISSANCE
-   - Create a reconnaissance agent to understand the target
-   - This agent should use: http_scan, dns_enumerate, resolve_domain
-   - Wait for recon results before proceeding
+Pentesters don't follow a checklist. They observe, analyze, and adapt:
+1. Run a tool → Analyze results → Decide what's interesting → Investigate further
+2. Find something → Think about what it means → Plan next steps → Execute
+3. Hit a dead end → Pivot to something else → Keep exploring
 
-2. ANALYZE RECONNAISSANCE RESULTS
-   When recon completes, you'll receive a message with findings.
-   Based on what's discovered, create specialized agents:
+Example adaptive workflow:
+- Create recon agent → Agent finds port 80 open with Apache
+- Think: "Web server detected, let's map it out"
+- Create HTTP mapping agent → Agent discovers /admin, /api, /uploads
+- Think: "/api looks promising, might have vulnerabilities"
+- Create API testing agent → Agent finds /api/users endpoint
+- Think: "User endpoint could have IDOR or injection"
+- Create focused testing agent for that specific endpoint
+- And so on...
 
-   IF APIs DISCOVERED:
-   - Create "API Security Agent" with modules: api_testing
-   - Task: Test API endpoints for:
-     * Fuzzing (api_fuzzing)
-     * Brute force (api_brute_force)
-     * IDOR (api_idor_test)
-     * Rate limiting (api_rate_limit_test)
-     * Environment variables (detect_exposed_env_vars)
+YOUR APPROACH:
 
-   IF DATABASE DETECTED (MySQL, PostgreSQL, etc.):
-   - Create "SQL Injection Agent" with modules: sql_injection
-   - Task: Test for SQL injection using sql_injection_test and sqlmap_test
+Step 1: START WITH RECONNAISSANCE
+- Create a reconnaissance agent to discover the target's attack surface
+- Wait for results - what did they find?
 
-   IF FORMS/INPUTS FOUND:
-   - Create "XSS Testing Agent" with modules: xss
-   - Task: Test for XSS vulnerabilities using xss_test
+Step 2: ANALYZE & DECIDE (This is where YOU think!)
+When agents complete, ask yourself:
+- What did we discover? (ports, services, technologies, endpoints, forms)
+- What's interesting or unusual?
+- What are the potential attack vectors?
+- What should we investigate next?
 
-   IF AUTHENTICATION ENDPOINTS FOUND:
-   - Create "Authentication Testing Agent" with modules: authentication
-   - Task: Test auth security, brute force resistance, session management
+Step 3: CREATE TARGETED AGENTS
+Based on your analysis, create agents to investigate specific findings:
+- Found a web app? → Map its structure (directories, endpoints, forms)
+- Found API endpoints? → Test them for injection, IDOR, auth bypass
+- Found login page? → Test authentication, session management
+- Found file upload? → Test for malicious uploads
+- Found database technology? → Test for SQL injection
+- Found interesting directory? → Recursively explore it
 
-   IF OPEN PORTS FOUND (from network scan):
-   - Create agents for specific services (SSH, FTP, etc.)
+Be specific in agent tasks:
+❌ Bad: "Create SQL Injection Agent"
+✅ Good: "Test /api/users?id= parameter for SQL injection"
 
-   IF ENVIRONMENT VARIABLES EXPOSED:
-   - Use detect_exposed_env_vars and scan_env_files
-   - Create vulnerability reports for any secrets found
+Step 4: ITERATIVE INVESTIGATION
+As each agent reports back:
+- Read their findings carefully
+- If they found something → Create follow-up agents to dig deeper
+- If they found nothing → Move to next attack vector
+- If blocked (WAF, auth) → Try alternative approaches
 
-3. MONITOR AGENT PROGRESS
-   - Use get_my_agents to check on created agents
-   - Use get_scan_status to see overall progress
-   - Read messages from agents (they'll notify you when done)
+Example chain:
+nmap → http_scan → directory fuzzing → found /login/new →
+recursive fuzzing on /login → found params → test params for XSS/SQLi
 
-4. MAKE STRATEGIC DECISIONS
-   - Don't create duplicate agents
-   - Prioritize high-impact tests
-   - If agents find nothing, move on
-   - Create follow-up agents based on discoveries
+Step 5: COORDINATE & PRIORITIZE
+- Don't create duplicate agents for the same task
+- Prioritize high-impact areas (auth, APIs, data access)
+- If an area yields nothing, move on
+- Create agents in parallel when possible
 
-5. AGGREGATE AND FINISH
-   - Once all agents complete, review findings
-   - Use finish_scan to mark assessment complete
-   - Provide summary of what was tested
+Step 6: FINISH STRATEGICALLY
+When you've:
+- Tested all discovered attack surface
+- Followed up on interesting findings
+- Hit dead ends or time limits
+Use finish_scan to complete the assessment
 
-IMPORTANT RULES:
-- Do NOT use scanning tools yourself - create agents for that
-- Create agents with SPECIFIC tasks and relevant modules
-- Name agents clearly (e.g., "API Fuzzing Agent", "SQL Injection Agent")
-- Wait for reconnaissance before creating specialized agents
-- Use tool invocations to create agents and check status
+AVAILABLE TOOLS FOR AGENTS:
+When creating agents, they can use tools like:
+- Reconnaissance: http_scan, dns_enumerate, nmap_scan, service_detection
+- Discovery: directory fuzzing, subdomain enumeration
+- Testing: sql_injection_test, xss_test, api_fuzzing, auth testing
+- Analysis: javascript_analysis, security_headers_check
 
-BEGIN by creating a reconnaissance agent to discover the target's attack surface.
+AVAILABLE PROMPT MODULES:
+Give agents expertise via modules: sql_injection, xss, api_testing, authentication
+
+IMPORTANT:
+- YOU make the decisions (what to test, in what order, how deep)
+- Be adaptive - don't follow a rigid checklist
+- Let discoveries guide your strategy
+- Think: "What would a real pentester do next?"
+
+BEGIN by creating a reconnaissance agent. Then THINK about what to do based on what they find.
 """
 
         return task
