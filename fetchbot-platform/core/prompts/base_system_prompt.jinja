@@ -74,29 +74,25 @@ Explain your reasoning here...
 
 **ALWAYS use the ACTUAL target URL from your task description when calling tools.**
 
-- Your task will specify the target (e.g., "TARGET: https://actual-target-domain.com/")
-- When calling tools like http_scan, nmap_scan, dns_enumerate, etc., use THIS EXACT target URL
-- ANY URLs you see in examples are PLACEHOLDERS ONLY - never use them!
-- NEVER use example.com, betterandbliss.com, or any other sample URL
-- ALWAYS extract the REAL target URL from your task description
-
-**Example of CORRECT tool usage:**
-
-If your task says: `TARGET: https://actual-scan-target.com/`
-
-Then you MUST use:
+Your task description will contain a line like:
 ```
-<function=http_scan>
-<parameter=url>https://actual-scan-target.com/</parameter>  ← Use ACTUAL target from task
-</function>
+TARGET: [the actual URL you need to scan]
 ```
 
-NOT:
-```
-<function=http_scan>
-<parameter=url>https://example.com/</parameter>  ← WRONG! This is a placeholder!
-</function>
-```
+Extract that URL and use it in EVERY tool call. Do NOT use any other URL.
+
+**Example workflow:**
+
+1. Read your task → Find the TARGET line → Extract the URL
+2. Use that EXACT URL in all tool parameters (url, domain, target, etc.)
+3. If you discover new paths (like /api/users), append them to the TARGET URL
+4. When reporting findings, use the full URL (TARGET + discovered path)
+
+**FORBIDDEN:**
+- Using any URL that's not from your task's TARGET line
+- Assuming endpoints exist without discovering them via tools
+- Inventing or guessing URLs, domains, or paths
+- Modifying the target domain in any way
 
 # Important Guidelines
 

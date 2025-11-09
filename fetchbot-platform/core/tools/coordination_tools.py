@@ -351,6 +351,54 @@ def create_vulnerability_report(
                 "message": "Vulnerability report rejected due to generic evidence"
             }
 
+    # CRITICAL: Validate affected_url matches the scan target
+    # This prevents reporting vulnerabilities for placeholder/wrong domains
+    if affected_url and agent_state.target:
+        from urllib.parse import urlparse
+
+        # Extract domain from scan target
+        target_domain = urlparse(agent_state.target).netloc.lower()
+
+        # Extract domain from affected URL
+        affected_domain = urlparse(affected_url).netloc.lower()
+
+        # Check for placeholder domains that should NEVER appear in reports
+        forbidden_domains = [
+            "actual-target.com", "actual-target-domain.com",
+            "actual-scan-target.com", "example.com", "example.org",
+            "betterandbliss.com", "betterandblissnew.com",
+            "your-target.com", "target.com", "test.com"
+        ]
+
+        if affected_domain in forbidden_domains:
+            error_msg = (
+                f"REJECTED: Affected URL contains placeholder domain: {affected_domain}\n"
+                f"You used: {affected_url}\n"
+                f"You MUST use the actual scan target: {agent_state.target}\n"
+                f"This is not a real vulnerability - you're reporting against a fake URL!"
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to placeholder URL"
+            }
+
+        # Validate affected domain matches target domain
+        if affected_domain != target_domain:
+            error_msg = (
+                f"REJECTED: Affected URL domain doesn't match scan target!\n"
+                f"Scan target: {agent_state.target} (domain: {target_domain})\n"
+                f"Affected URL: {affected_url} (domain: {affected_domain})\n"
+                f"You can only report vulnerabilities for the target you're scanning!"
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to domain mismatch"
+            }
+
     finding = {
         "title": title,
         "severity": severity.upper(),
