@@ -737,10 +737,11 @@ async def get_job_report(
 async def start_dynamic_scan(
     scan_data: ScanCreate,
     background_tasks: BackgroundTasks,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
     """Start a dynamic multi-agent security scan"""
+    org, user = auth
     from config import get_settings
     settings = get_settings()
 
@@ -777,10 +778,11 @@ async def start_dynamic_scan(
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
     """Get scan status with findings"""
+    org, user = auth
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
@@ -834,13 +836,37 @@ async def get_scan_status(
     return response
 
 
+@app.get("/scan/{job_id}/logs")
+async def get_scan_logs(
+    job_id: str,
+    auth: tuple = Depends(verify_user_or_api_key),
+    db: Session = Depends(get_db)
+):
+    """Get execution logs for a scan"""
+    org, user = auth
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Return execution logs (stored as JSON in execution_logs column)
+    return {
+        "job_id": job_id,
+        "logs": job.execution_logs if hasattr(job, 'execution_logs') and job.execution_logs else []
+    }
+
+
 @app.get("/scan/{job_id}/agent-graph")
 async def get_agent_graph(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
     """Get agent hierarchy graph for visualization"""
+    org, user = auth
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -868,6 +894,108 @@ async def get_agent_graph(
             "error": str(e),
             "graph": {"nodes": [], "edges": []}
         }
+
+
+@app.get("/scans")
+async def list_scans(
+    organization_id: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
+    auth: tuple = Depends(verify_user_or_api_key),
+    db: Session = Depends(get_db)
+):
+    """List all scans for an organization with pagination"""
+    org, user = auth
+    query = db.query(PentestJob).filter(PentestJob.organization_id == org.id)
+
+    # Apply filters
+    if organization_id:
+        query = query.filter(PentestJob.organization_id == organization_id)
+
+    # Get total count
+    total = query.count()
+
+    # Apply pagination
+    scans = query.order_by(PentestJob.created_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "scans": [
+            {
+                "id": job.id,
+                "name": job.name,
+                "target": job.target,
+                "status": job.status.value,
+                "created_at": job.created_at.isoformat() if job.created_at else None,
+                "started_at": job.started_at.isoformat() if job.started_at else None,
+                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                "total_findings": job.total_findings or 0,
+                "critical_count": job.critical_count or 0,
+                "high_count": job.high_count or 0
+            }
+            for job in scans
+        ]
+    }
+
+
+@app.get("/findings")
+async def list_findings(
+    status: Optional[List[str]] = None,
+    severity: Optional[List[str]] = None,
+    scan_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    auth: tuple = Depends(verify_user_or_api_key),
+    db: Session = Depends(get_db)
+):
+    """List findings with optional filters"""
+    org, user = auth
+    # Get all jobs for this organization
+    job_ids = db.query(PentestJob.id).filter(PentestJob.organization_id == org.id).all()
+    job_ids = [job_id[0] for job_id in job_ids]
+
+    # Query findings
+    query = db.query(Finding).filter(Finding.pentest_job_id.in_(job_ids))
+
+    # Apply filters
+    if scan_id:
+        query = query.filter(Finding.pentest_job_id == scan_id)
+
+    if severity:
+        query = query.filter(Finding.severity.in_(severity))
+
+    # Note: 'status' filter for findings - assuming all findings are 'open' by default
+    # If you have a status field on Finding model, add: query = query.filter(Finding.status.in_(status))
+
+    # Get total count
+    total = query.count()
+
+    # Apply pagination
+    findings = query.order_by(Finding.created_at.desc()).offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "findings": [
+            {
+                "id": f.id,
+                "title": f.title,
+                "description": f.description,
+                "severity": f.severity.value,
+                "type": f.vulnerability_type,
+                "url": f.url,
+                "payload": f.payload,
+                "discovered_by": f.discovered_by,
+                "scan_id": f.pentest_job_id,
+                "created_at": f.created_at.isoformat() if f.created_at else None,
+                "status": "open"  # Add status field to Finding model if needed
+            }
+            for f in findings
+        ]
+    }
 
 
 @app.websocket("/ws/scan/{job_id}")
