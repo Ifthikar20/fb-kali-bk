@@ -5,11 +5,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from jose import JWTError, jwt
 import asyncio
 import os
 
-from models import Organization, PentestJob, Finding, JobStatus, init_db, get_db
+from models import Organization, PentestJob, Finding, User, JobStatus, init_db, get_db
 from config import get_settings
 
 # Detect which orchestrator to use based on environment
@@ -83,7 +84,56 @@ class ScanCreate(BaseModel):
     target: str
     organization_id: Optional[int] = None
 
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security), 
+class UserRegister(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    organization_id: str  # Users must belong to an organization
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user_id: str
+    username: str
+    organization_id: str
+
+# JWT Helper Functions
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    """Create JWT access token"""
+    settings = get_settings()
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=7)  # Default 7 days
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret, algorithm="HS256")
+    return encoded_jwt
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security),
+                 db: Session = Depends(get_db)) -> User:
+    """Verify JWT token and return user"""
+    settings = get_settings()
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+    return user
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
     api_key = credentials.credentials
@@ -91,6 +141,32 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
     if not org or not org.active:
         raise HTTPException(status_code=401, detail="Invalid API key")
     return org
+
+def verify_user_or_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
+                            db: Session = Depends(get_db)) -> tuple[Organization, Optional[User]]:
+    """Verify either JWT token or API key, return (organization, user)"""
+    token = credentials.credentials
+    settings = get_settings()
+
+    # Try JWT token first
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id: str = payload.get("sub")
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and user.active:
+                org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+                if org:
+                    return org, user
+    except JWTError:
+        pass
+
+    # Try API key
+    org = db.query(Organization).filter(Organization.api_key == token).first()
+    if org and org.active:
+        return org, None
+
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 @app.post("/api/organizations")
 async def create_organization(org_data: OrganizationCreate, db: Session = Depends(get_db)):
@@ -169,6 +245,86 @@ async def get_my_organization(org: Organization = Depends(verify_api_key)):
         'name': org.name,
         'elastic_ip': org.elastic_ip,
         'ec2_running': org.ec2_running
+    }
+
+@app.post("/api/register", response_model=Token)
+async def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
+    """Register a new user"""
+    # Check if username exists
+    existing_user = db.query(User).filter(User.username == user_data.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Check if email exists
+    existing_email = db.query(User).filter(User.email == user_data.email).first()
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Check if organization exists
+    org = db.query(Organization).filter(Organization.id == user_data.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    # Create user
+    user = User(
+        username=user_data.username,
+        email=user_data.email,
+        full_name=user_data.full_name,
+        organization_id=user_data.organization_id
+    )
+    user.set_password(user_data.password)
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # Create access token
+    access_token = create_access_token(data={"sub": user.id})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "username": user.username,
+        "organization_id": user.organization_id
+    }
+
+@app.post("/api/login", response_model=Token)
+async def login_user(login_data: UserLogin, db: Session = Depends(get_db)):
+    """Login user and return JWT token"""
+    # Find user
+    user = db.query(User).filter(User.username == login_data.username).first()
+    if not user or not user.check_password(login_data.password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if not user.active:
+        raise HTTPException(status_code=401, detail="User account is disabled")
+
+    # Update last login
+    user.last_login = datetime.utcnow()
+    db.commit()
+
+    # Create access token
+    access_token = create_access_token(data={"sub": user.id})
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user_id": user.id,
+        "username": user.username,
+        "organization_id": user.organization_id
+    }
+
+@app.get("/api/me")
+async def get_current_user(user: User = Depends(verify_token)):
+    """Get current logged in user info"""
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "full_name": user.full_name,
+        "organization_id": user.organization_id,
+        "is_admin": user.is_admin
     }
 
 async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url: str):
@@ -444,12 +600,14 @@ async def get_job_report(
 async def start_dynamic_scan(
     scan_data: ScanCreate,
     background_tasks: BackgroundTasks,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
-    """Start a dynamic multi-agent security scan"""
+    """Start a dynamic multi-agent security scan (supports JWT or API key auth)"""
     from config import get_settings
     settings = get_settings()
+
+    org, user = auth  # Unpack organization and optional user
 
     # Create job with generic name
     job = PentestJob(
@@ -484,10 +642,12 @@ async def start_dynamic_scan(
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
-    """Get scan status with findings"""
+    """Get scan status with findings (supports JWT or API key auth)"""
+    org, user = auth
+
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
@@ -544,10 +704,12 @@ async def get_scan_status(
 @app.get("/scan/{job_id}/agent-graph")
 async def get_agent_graph(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    auth: tuple = Depends(verify_user_or_api_key),
     db: Session = Depends(get_db)
 ):
-    """Get agent hierarchy graph for visualization"""
+    """Get agent hierarchy graph for visualization (supports JWT or API key auth)"""
+    org, user = auth
+
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
