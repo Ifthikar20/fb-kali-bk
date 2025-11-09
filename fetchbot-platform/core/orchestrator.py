@@ -68,7 +68,7 @@ class DynamicOrchestrator:
         log_scan_status(
             job_id=job_id,
             status="started",
-            details=f"Initializing security assessment for {target}",
+            details=f"Starting dynamic scan for target: {target}",
             db_url=db_url
         )
 
@@ -79,7 +79,7 @@ class DynamicOrchestrator:
             log_scan_status(
                 job_id=job_id,
                 status="running",
-                details="Root coordinator agent created, beginning analysis",
+                details=f"Root Coordinator initialized. Target set to: {target}. Beginning multi-agent assessment...",
                 db_url=db_url
             )
 

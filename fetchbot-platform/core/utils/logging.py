@@ -75,7 +75,7 @@ def add_execution_log(
 
 
 def log_agent_created(job_id: str, agent_name: str, parent_agent: str, db_url: Optional[str] = None):
-    """Log agent creation with descriptive message"""
+    """Log agent creation with descriptive message showing invocation chain"""
 
     # Map agent types to descriptive purposes
     agent_purposes = {
@@ -86,15 +86,19 @@ def log_agent_created(job_id: str, agent_name: str, parent_agent: str, db_url: O
         "Authentication Testing Agent": "to test authentication and authorization mechanisms",
         "Focused Reconnaissance Agent": "to perform targeted reconnaissance",
         "Comprehensive Reconnaissance Agent": "to perform deep reconnaissance",
+        "File Upload Testing Agent": "to test file upload functionality for vulnerabilities",
+        "Directory Traversal Agent": "to test for directory traversal vulnerabilities",
+        "Command Injection Agent": "to test for command injection vulnerabilities",
     }
 
     # Get purpose or use generic message
     purpose = agent_purposes.get(agent_name, "to perform specialized security testing")
 
+    # Show agent invocation chain: Parent → Child
     add_execution_log(
         job_id=job_id,
-        action=f"🤖 Spawned {agent_name}",
-        details=f"Created specialized agent {purpose}",
+        action=f"🤖 Agent Created: [{parent_agent}] → [{agent_name}]",
+        details=f"{parent_agent} spawned '{agent_name}' {purpose}",
         agent=parent_agent,
         db_url=db_url
     )
