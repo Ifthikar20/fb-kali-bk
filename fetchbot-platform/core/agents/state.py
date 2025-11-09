@@ -31,7 +31,8 @@ class AgentState:
         sandbox_url: str = "http://kali-agent-1:9000",
         auth_token: Optional[str] = None,
         db_url: Optional[str] = None,
-        job_id: Optional[str] = None
+        job_id: Optional[str] = None,
+        target: Optional[str] = None
     ):
         self.agent_id = agent_id or str(uuid.uuid4())
         self.parent_id = parent_id
@@ -40,6 +41,7 @@ class AgentState:
         self.auth_token = auth_token or self._generate_token()
         self.db_url = db_url
         self.job_id = job_id or agent_id  # Default job_id to agent_id
+        self.target = target  # Target URL/domain for this scan
 
         # Conversation history with LLM
         self.conversation_history: List[Dict[str, str]] = []

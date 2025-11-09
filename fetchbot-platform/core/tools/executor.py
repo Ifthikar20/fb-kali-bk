@@ -46,6 +46,23 @@ async def execute_tool(
 
     sandbox_execution = tool_info.get("sandbox_execution", False)
 
+    # Auto-inject target parameter if not provided and agent has a target
+    if sandbox_execution and hasattr(agent_state, 'target') and agent_state.target:
+        # If target-like parameter is not already provided, inject it
+        if not any(k in kwargs for k in ['target', 'url', 'domain', 'ip', 'host']):
+            # Determine the appropriate parameter name for this tool
+            # Most tools use 'target', but some use 'url' or 'domain'
+            if 'dns' in tool_name.lower():
+                kwargs['domain'] = agent_state.target
+            elif 'resolve' in tool_name.lower():
+                kwargs['domain'] = agent_state.target
+            elif 'http' in tool_name.lower() or 'api' in tool_name.lower():
+                kwargs['url'] = agent_state.target
+            else:
+                kwargs['target'] = agent_state.target
+
+            logger.debug(f"Auto-injected target '{agent_state.target}' into tool '{tool_name}'")
+
     try:
         # Log tool execution for sandbox tools (security scanning tools)
         if sandbox_execution and hasattr(agent_state, 'job_id') and hasattr(agent_state, 'db_url'):
@@ -54,8 +71,8 @@ async def execute_tool(
             agent_info = graph.get_agent_info(agent_state.agent_id)
             agent_name = agent_info.get("name", "Unknown") if agent_info else "Unknown"
 
-            # Get target from kwargs if available
-            target = kwargs.get("target") or kwargs.get("url") or kwargs.get("domain") or "target"
+            # Get target from kwargs (now includes auto-injected target)
+            target = kwargs.get("target") or kwargs.get("url") or kwargs.get("domain") or agent_state.target or "target"
 
             # Log the tool execution
             log_tool_execution(

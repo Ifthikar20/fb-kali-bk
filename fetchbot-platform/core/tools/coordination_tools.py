@@ -58,13 +58,14 @@ def create_agent(
     # Create LLM config for new agent
     llm_config = LLMConfig(prompt_modules=module_list)
 
-    # Create agent configuration
+    # Create agent configuration (inherit target from parent)
     agent_config = {
         "llm_config": llm_config,
         "max_iterations": 50,
         "sandbox_url": agent_state.sandbox_url,
         "db_url": agent_state.db_url,
-        "job_id": agent_state.job_id
+        "job_id": agent_state.job_id,
+        "target": agent_state.target  # Propagate target to child agents
     }
 
     # Create new agent

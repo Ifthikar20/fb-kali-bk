@@ -53,7 +53,8 @@ class RootAgent(BaseAgent):
             "max_iterations": 100,  # Root agent can run longer
             "sandbox_url": "http://kali-agent-1:9000",
             "db_url": db_url,
-            "job_id": job_id
+            "job_id": job_id,
+            "target": target  # Target URL/domain
         }
 
         super().__init__(
