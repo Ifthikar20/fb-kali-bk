@@ -145,7 +145,25 @@ class ScanCreate(BaseModel):
     target: str
     organization_id: Optional[int] = None
 
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security), 
+class UserRegister(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    organization_id: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user_id: str
+    username: str
+    organization_id: str
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
     api_key = credentials.credentials
