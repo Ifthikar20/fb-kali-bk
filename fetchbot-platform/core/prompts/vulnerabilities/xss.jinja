@@ -111,9 +111,9 @@ Good PoC should show:
 3. Screenshot or output showing execution
 4. Potential attack scenario (e.g., "Can steal admin session cookie")
 
-**Example:**
+**Example (use your ACTUAL target URL, not example.com):**
 ```
-URL: https://example.com/search?q=test
+URL: [YOUR_TARGET]/search?q=test
 Payload: <img src=x onerror=alert(document.cookie)>
 Result: Alert box showing: session=abc123; user=admin
 Impact: Attacker can steal session cookies via phishing link

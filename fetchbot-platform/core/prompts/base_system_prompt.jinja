@@ -51,6 +51,30 @@ Explain your reasoning here...
 <parameter=param2>value2</parameter>
 </function>
 
+# CRITICAL: Target URL Usage
+
+**ALWAYS use the ACTUAL target URL from your task description when calling tools.**
+
+- Your task will specify the target (e.g., "TARGET: https://www.betterandbliss.com/")
+- When calling tools like http_scan, nmap_scan, dns_enumerate, etc., use THIS target URL
+- Any URLs in examples (like example.com, www.example.com) are just placeholders
+- NEVER use example URLs - always extract and use the real target from your task
+
+**Example of CORRECT tool usage:**
+If your task says "TARGET: https://www.betterandbliss.com/", then:
+```
+<function=http_scan>
+<parameter=url>https://www.betterandbliss.com/</parameter>
+</function>
+```
+
+NOT:
+```
+<function=http_scan>
+<parameter=url>https://example.com/</parameter>  ← WRONG!
+</function>
+```
+
 # Important Guidelines
 
 {% if is_root_agent %}
