@@ -444,11 +444,17 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
             finding = Finding(
                 pentest_job_id=job_id,
                 title=finding_data.get('title', 'Unknown'),
+                description=finding_data.get('description', ''),
                 severity=finding_data.get('severity', 'info'),
                 vulnerability_type=finding_data.get('type', 'unknown'),
                 url=finding_data.get('url'),
                 payload=finding_data.get('payload'),
-                discovered_by=finding_data.get('discovered_by', 'unknown')
+                discovered_by=finding_data.get('discovered_by', 'unknown'),
+                evidence=finding_data.get('evidence', {}),
+                remediation=finding_data.get('remediation', {}),
+                cvss_score=finding_data.get('cvss_score'),
+                cwe=finding_data.get('cwe'),
+                owasp_category=finding_data.get('owasp_category')
             )
             db.add(finding)
         
@@ -520,7 +526,12 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
                 vulnerability_type=finding_data.get('type', 'unknown'),
                 url=finding_data.get('affected_url') or finding_data.get('url'),
                 payload=finding_data.get('payload'),
-                discovered_by=finding_data.get('discovered_by', 'Dynamic Agent')
+                discovered_by=finding_data.get('discovered_by', 'Dynamic Agent'),
+                evidence=finding_data.get('evidence', {}),
+                remediation=finding_data.get('remediation', {}),
+                cvss_score=finding_data.get('cvss_score'),
+                cwe=finding_data.get('cwe'),
+                owasp_category=finding_data.get('owasp_category')
             )
             db.add(finding)
 
@@ -662,10 +673,18 @@ async def get_job_findings(
             {
                 'id': f.id,
                 'title': f.title,
+                'description': f.description,
                 'severity': f.severity.value,
                 'vulnerability_type': f.vulnerability_type,
                 'url': f.url,
-                'discovered_by': f.discovered_by
+                'payload': f.payload,
+                'discovered_by': f.discovered_by,
+                'evidence': f.evidence if hasattr(f, 'evidence') and f.evidence else {},
+                'remediation': f.remediation if hasattr(f, 'remediation') and f.remediation else {},
+                'cvss_score': f.cvss_score if hasattr(f, 'cvss_score') else None,
+                'cwe': f.cwe if hasattr(f, 'cwe') else None,
+                'owasp_category': f.owasp_category if hasattr(f, 'owasp_category') else None,
+                'discovered_at': f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None
             }
             for f in findings
         ]
@@ -794,17 +813,23 @@ async def get_scan_status(
     # Get findings
     findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
 
-    # Format findings
+    # Format findings with detailed evidence
     formatted_findings = [
         {
+            "id": f.id,
             "title": f.title,
             "severity": f.severity.value,
             "type": f.vulnerability_type,
             "description": f.description,
             "discovered_by": f.discovered_by,
             "payload": f.payload,
-            "evidence": f.poc_code,
-            "url": f.url
+            "url": f.url,
+            "evidence": f.evidence if hasattr(f, 'evidence') and f.evidence else {},
+            "remediation": f.remediation if hasattr(f, 'remediation') and f.remediation else {},
+            "cvss_score": f.cvss_score if hasattr(f, 'cvss_score') else None,
+            "cwe": f.cwe if hasattr(f, 'cwe') else None,
+            "owasp_category": f.owasp_category if hasattr(f, 'owasp_category') else None,
+            "discovered_at": f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None
         }
         for f in findings
     ]
@@ -990,6 +1015,12 @@ async def list_findings(
                 "payload": f.payload,
                 "discovered_by": f.discovered_by,
                 "scan_id": f.pentest_job_id,
+                "evidence": f.evidence if hasattr(f, 'evidence') and f.evidence else {},
+                "remediation": f.remediation if hasattr(f, 'remediation') and f.remediation else {},
+                "cvss_score": f.cvss_score if hasattr(f, 'cvss_score') else None,
+                "cwe": f.cwe if hasattr(f, 'cwe') else None,
+                "owasp_category": f.owasp_category if hasattr(f, 'owasp_category') else None,
+                "discovered_at": f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None,
                 "created_at": f.created_at.isoformat() if f.created_at else None,
                 "status": "open"  # Add status field to Finding model if needed
             }
