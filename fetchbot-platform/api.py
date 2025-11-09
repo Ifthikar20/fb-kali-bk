@@ -1022,18 +1022,37 @@ async def websocket_scan_stream(websocket: WebSocket, job_id: str):
             "data": {"job_id": job_id, "message": "Connected to scan stream"}
         })
 
-        # Keep connection alive and handle client messages
-        while True:
-            data = await websocket.receive_text()
+        logger.info(f"[WEBSOCKET] Client connected and waiting for scan events: {job_id}")
 
-            # Client can request current status
-            if data == "ping":
-                await websocket.send_json({"event": "pong", "data": {}})
+        # Keep connection alive - events are sent via ws_manager.send_event() from background task
+        # This loop keeps the connection open and handles optional client messages
+        while True:
+            try:
+                # Use receive_text with timeout to keep connection alive
+                # but not block indefinitely
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+
+                # Client can request current status
+                if data == "ping":
+                    await websocket.send_json({"event": "pong", "data": {}})
+
+            except asyncio.TimeoutError:
+                # No message received, but that's ok - keep connection alive
+                # Send heartbeat to keep connection active
+                try:
+                    await websocket.send_json({"event": "heartbeat", "data": {}})
+                except:
+                    # Connection closed
+                    break
+            except WebSocketDisconnect:
+                # Client disconnected gracefully
+                break
 
     except WebSocketDisconnect:
+        logger.info(f"[WEBSOCKET] Client disconnected: {job_id}")
         ws_manager.disconnect(websocket, job_id)
     except Exception as e:
-        logger.error(f"[WEBSOCKET] Error: {e}")
+        logger.error(f"[WEBSOCKET] Error for job {job_id}: {e}")
         ws_manager.disconnect(websocket, job_id)
 
 
