@@ -63,13 +63,19 @@ class BaseAgent:
         self.llm_config: LLMConfig = config["llm_config"]
         self.max_iterations = config.get("max_iterations", 50)
         sandbox_url = config.get("sandbox_url", "http://kali-agent-1:9000")
+        self.db_url = config.get("db_url")
+        self.job_id = config.get("job_id")
+        self.target = config.get("target")  # Target URL/domain
 
         # Initialize state
         self.state = AgentState(
             agent_id=self.agent_id,
             parent_id=self.parent_id,
             task=task,
-            sandbox_url=sandbox_url
+            sandbox_url=sandbox_url,
+            db_url=self.db_url,
+            job_id=self.job_id,
+            target=self.target
         )
         self.state.max_iterations = self.max_iterations
 

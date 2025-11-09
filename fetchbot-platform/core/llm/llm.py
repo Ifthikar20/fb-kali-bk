@@ -134,6 +134,10 @@ class LLM:
 
             # Parse response
             content = response.content[0].text
+
+            # Log the raw response for debugging
+            logger.debug(f"Raw LLM response: {content[:500]}...")  # First 500 chars
+
             tool_invocations = parse_tool_invocations(content)
             thinking = extract_thinking(content)
 

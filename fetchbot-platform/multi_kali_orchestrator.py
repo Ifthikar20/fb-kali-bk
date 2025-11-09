@@ -126,7 +126,7 @@ Respond in JSON:
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-sonnet-20240229",
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -194,7 +194,7 @@ Respond in JSON:
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-sonnet-20240229",
                 max_tokens=1536,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -258,7 +258,7 @@ Keep professional and actionable (300-500 words)."""
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model="claude-3-sonnet-20240229",
                 max_tokens=2048,
                 messages=[{"role": "user", "content": prompt}]
             )

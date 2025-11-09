@@ -36,13 +36,14 @@ class RootAgent(BaseAgent):
     3. Network agent finds open ports → Creates service-specific agents
     """
 
-    def __init__(self, target: str, job_id: str):
+    def __init__(self, target: str, job_id: str, db_url: str = None):
         """
         Initialize root coordinator agent
 
         Args:
             target: Target URL, domain, or IP to assess
             job_id: Unique job identifier for this assessment
+            db_url: Database URL for execution logging (optional)
         """
         # Root agent has NO prompt modules (empty list)
         llm_config = LLMConfig(prompt_modules=[])
@@ -50,7 +51,10 @@ class RootAgent(BaseAgent):
         config = {
             "llm_config": llm_config,
             "max_iterations": 100,  # Root agent can run longer
-            "sandbox_url": "http://kali-agent-1:9000"
+            "sandbox_url": "http://kali-agent-1:9000",
+            "db_url": db_url,
+            "job_id": job_id,
+            "target": target  # Target URL/domain
         }
 
         super().__init__(
@@ -63,6 +67,7 @@ class RootAgent(BaseAgent):
 
         self.target = target
         self.job_id = job_id
+        self.db_url = db_url
 
         logger.info(f"Root coordinator initialized for target: {target}")
 
