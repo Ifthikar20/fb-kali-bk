@@ -114,7 +114,7 @@ Respond in JSON format:
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-sonnet-20240229",
                 max_tokens=1024,
                 messages=[
                     {"role": "user", "content": prompt}
@@ -189,7 +189,7 @@ If no further scans are needed, use action: "stop"."""
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-sonnet-20240229",
                 max_tokens=1536,
                 messages=[
                     {"role": "user", "content": prompt}
@@ -257,7 +257,7 @@ Keep it professional and actionable (300-500 words)."""
 
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model="claude-3-sonnet-20240229",
                 max_tokens=2048,
                 messages=[
                     {"role": "user", "content": prompt}

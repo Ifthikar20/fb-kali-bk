@@ -24,7 +24,7 @@ class LLMConfig:
     """
 
     prompt_modules: List[str] = field(default_factory=list)
-    model: str = "claude-3-5-sonnet-20240620"  # Valid Claude 3.5 Sonnet model
+    model: str = "claude-3-sonnet-20240229"  # Claude 3 Sonnet (widely available)
     max_tokens: int = 4000
     temperature: float = 0.7
 
