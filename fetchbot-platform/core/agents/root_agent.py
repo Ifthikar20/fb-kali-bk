@@ -57,12 +57,33 @@ class RootAgent(BaseAgent):
             "target": target  # Target URL/domain
         }
 
+        # Create explicit task with target emphasized
+        task = f"""
+You are the ROOT COORDINATOR for a comprehensive security assessment.
+
+TARGET: {target}
+
+CRITICAL: You MUST use this EXACT target URL in ALL operations:
+- When creating agents, pass them this target: {target}
+- When agents call tools, they should use this target: {target}
+- DO NOT use example.com, betterandbliss.com, or any other URL
+- The ONLY valid target for this scan is: {target}
+
+Your job:
+1. Perform initial reconnaissance to understand the target
+2. Create specialized agents based on what you discover
+3. Coordinate agents and aggregate their findings
+4. Generate final security assessment report
+
+Remember: ALWAYS use {target} - no other URL is valid for this scan.
+"""
+
         super().__init__(
             config=config,
             agent_id=job_id,  # Use job_id as root agent ID
             parent_id=None,  # No parent - this is root
             name="Root Coordinator",
-            task=f"Conduct comprehensive security assessment of {target}"
+            task=task
         )
 
         self.target = target

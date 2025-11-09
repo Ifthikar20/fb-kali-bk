@@ -68,12 +68,25 @@ def create_agent(
         "target": agent_state.target  # Propagate target to child agents
     }
 
+    # Prepend target information to task to emphasize it
+    if agent_state.target:
+        emphasized_task = f"""
+TARGET: {agent_state.target}
+
+IMPORTANT: Use ONLY this target URL in all your tool calls: {agent_state.target}
+Do NOT use example.com, betterandbliss.com, or any other URL.
+
+{task}
+"""
+    else:
+        emphasized_task = task
+
     # Create new agent
     new_agent = BaseAgent(
         config=agent_config,
         parent_id=agent_state.agent_id,
         name=name,
-        task=task
+        task=emphasized_task
     )
 
     logger.info(
@@ -254,7 +267,7 @@ def agent_finish(
     }
 
 
-@register_tool(sandbox_execution=False, description="Create vulnerability report")
+@register_tool(sandbox_execution=False, description="Create detailed vulnerability report with evidence")
 def create_vulnerability_report(
     agent_state,
     title: str,
@@ -267,17 +280,29 @@ def create_vulnerability_report(
     affected_url: str = ""
 ) -> Dict[str, Any]:
     """
-    Create a detailed vulnerability report
+    Create a detailed vulnerability report with ACTUAL EVIDENCE from your scans
 
     Args:
-        title: Short title of the vulnerability
+        title: Short, specific title (e.g., "SQL Injection in /api/users?id= parameter")
         severity: CRITICAL, HIGH, MEDIUM, LOW, INFO
         vulnerability_type: Type (SQL_INJECTION, XSS, CSRF, IDOR, etc.)
-        description: Detailed description of the vulnerability
-        payload: Attack payload used
-        evidence: Proof of exploitation (responses, screenshots, etc.)
-        remediation: Recommended fix
-        affected_url: URL or endpoint affected
+        description: Detailed description explaining:
+                    - What you tested
+                    - What payload you used
+                    - What response you received
+                    - Why this is a security issue
+        payload: EXACT attack payload that worked (e.g., "' OR '1'='1' --")
+        evidence: ACTUAL results from the tool:
+                 - HTTP status codes
+                 - Error messages returned
+                 - Response headers
+                 - Database errors
+                 - Script execution proof
+                 Example: "Server returned: 'mysql error: syntax error near 1=1'"
+        remediation: Recommended fix (input validation, parameterized queries, etc.)
+        affected_url: Complete URL tested (e.g., "https://target.com/api/users?id=1")
+
+    IMPORTANT: Include REAL scan results, not generic descriptions!
 
     Returns:
         Report creation status
