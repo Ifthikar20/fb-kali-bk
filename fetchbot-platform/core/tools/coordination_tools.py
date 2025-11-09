@@ -312,6 +312,45 @@ def create_vulnerability_report(
     if severity.upper() not in valid_severities:
         severity = "MEDIUM"
 
+    # CRITICAL: Reject reports without evidence for CRITICAL/HIGH findings
+    # This prevents hallucinated vulnerabilities
+    if severity.upper() in ["CRITICAL", "HIGH"]:
+        if not payload or not evidence:
+            error_msg = (
+                f"REJECTED: Cannot report {severity} vulnerability without proof!\n"
+                f"Missing: {'payload' if not payload else ''} {'evidence' if not evidence else ''}\n"
+                f"You MUST include:\n"
+                f"  - payload: The exact attack string you used\n"
+                f"  - evidence: The actual tool output showing the vulnerability\n"
+                f"If you cannot provide these, the vulnerability is not confirmed."
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to missing evidence"
+            }
+
+        # Validate evidence is not generic/templated
+        generic_phrases = [
+            "likely vulnerable", "possibly vulnerable", "may be vulnerable",
+            "could be exploited", "potentially exploitable", "appears to be",
+            "seems to", "might contain", "could contain"
+        ]
+        evidence_lower = evidence.lower()
+        if any(phrase in evidence_lower for phrase in generic_phrases):
+            error_msg = (
+                f"REJECTED: Evidence contains generic/uncertain language!\n"
+                f"Evidence must show ACTUAL tool results, not assumptions.\n"
+                f"Include: HTTP status codes, error messages, response bodies, etc."
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to generic evidence"
+            }
+
     finding = {
         "title": title,
         "severity": severity.upper(),
