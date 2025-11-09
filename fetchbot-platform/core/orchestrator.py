@@ -11,6 +11,7 @@ from datetime import datetime
 
 from .agents.root_agent import RootAgent
 from .agents.agent_graph import get_agent_graph
+from .utils.logging import log_scan_status
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,8 @@ class DynamicOrchestrator:
         self,
         target: str,
         job_id: str,
-        organization_id: int = None
+        organization_id: int = None,
+        db_url: str = None
     ) -> Dict[str, Any]:
         """
         Run complete security assessment using dynamic agents
@@ -49,6 +51,7 @@ class DynamicOrchestrator:
             target: Target URL, domain, or IP
             job_id: Unique job identifier
             organization_id: Organization ID (optional)
+            db_url: Database URL for logging (optional)
 
         Returns:
             Dictionary with:
@@ -61,15 +64,40 @@ class DynamicOrchestrator:
 
         logger.info(f"Starting dynamic scan for target: {target} (job_id: {job_id})")
 
+        # Log scan start
+        log_scan_status(
+            job_id=job_id,
+            status="started",
+            details=f"Initializing security assessment for {target}",
+            db_url=db_url
+        )
+
         try:
             # Create root coordinator agent
-            root_agent = RootAgent(target=target, job_id=job_id)
+            root_agent = RootAgent(target=target, job_id=job_id, db_url=db_url)
+
+            log_scan_status(
+                job_id=job_id,
+                status="running",
+                details="Root coordinator agent created, beginning analysis",
+                db_url=db_url
+            )
 
             # Run assessment
             result = await root_agent.run_assessment()
 
             # Calculate execution time
             execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+            # Log scan completion
+            log_scan_status(
+                job_id=job_id,
+                status="completed",
+                details=f"Assessment complete. Found {result['total_findings']} vulnerabilities "
+                       f"({result['critical_findings']} critical, {result['high_findings']} high) "
+                       f"in {execution_time:.1f}s",
+                db_url=db_url
+            )
 
             # Format result
             return {
@@ -87,6 +115,14 @@ class DynamicOrchestrator:
 
         except Exception as e:
             logger.error(f"Dynamic scan failed for {target}: {e}", exc_info=True)
+
+            # Log scan failure
+            log_scan_status(
+                job_id=job_id,
+                status="failed",
+                details=f"Assessment failed: {str(e)}",
+                db_url=db_url
+            )
 
             return {
                 "status": "failed",

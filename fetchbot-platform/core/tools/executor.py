@@ -9,6 +9,8 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 from .registry import get_tool, _TOOL_REGISTRY
+from ..utils.logging import log_tool_execution
+from ..agents.agent_graph import get_agent_graph
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,25 @@ async def execute_tool(
     sandbox_execution = tool_info.get("sandbox_execution", False)
 
     try:
+        # Log tool execution for sandbox tools (security scanning tools)
+        if sandbox_execution and hasattr(agent_state, 'job_id') and hasattr(agent_state, 'db_url'):
+            # Get agent name for logging
+            graph = get_agent_graph()
+            agent_info = graph.get_agent_info(agent_state.agent_id)
+            agent_name = agent_info.get("name", "Unknown") if agent_info else "Unknown"
+
+            # Get target from kwargs if available
+            target = kwargs.get("target") or kwargs.get("url") or kwargs.get("domain") or "target"
+
+            # Log the tool execution
+            log_tool_execution(
+                job_id=agent_state.job_id,
+                tool_name=tool_name,
+                agent_name=agent_name,
+                target=target,
+                db_url=agent_state.db_url
+            )
+
         if sandbox_execution:
             # Execute in Docker container
             result = await _execute_in_sandbox(tool_name, agent_state, **kwargs)

@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from .registry import register_tool
 from ..agents.agent_graph import get_agent_graph
 from ..llm.config import LLMConfig
+from ..utils.logging import log_agent_created, log_finding_discovered, log_scan_status
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,9 @@ def create_agent(
     agent_config = {
         "llm_config": llm_config,
         "max_iterations": 50,
-        "sandbox_url": agent_state.sandbox_url
+        "sandbox_url": agent_state.sandbox_url,
+        "db_url": agent_state.db_url,
+        "job_id": agent_state.job_id
     }
 
     # Create new agent
@@ -75,6 +78,18 @@ def create_agent(
     logger.info(
         f"Created agent: {name} with modules {module_list} "
         f"(parent={agent_state.agent_id})"
+    )
+
+    # Log agent creation to database
+    parent_graph = get_agent_graph()
+    parent_info = parent_graph.get_agent_info(agent_state.agent_id)
+    parent_name = parent_info.get("name", "Unknown") if parent_info else "Unknown"
+
+    log_agent_created(
+        job_id=agent_state.job_id,
+        agent_name=name,
+        parent_agent=parent_name,
+        db_url=agent_state.db_url
     )
 
     # If inherit_context, copy parent's findings
@@ -287,6 +302,19 @@ def create_vulnerability_report(
     logger.info(
         f"Vulnerability report created: {title} ({severity}) "
         f"by agent {agent_state.agent_id}"
+    )
+
+    # Log finding discovery to database
+    graph = get_agent_graph()
+    agent_info = graph.get_agent_info(agent_state.agent_id)
+    agent_name = agent_info.get("name", "Unknown") if agent_info else "Unknown"
+
+    log_finding_discovered(
+        job_id=agent_state.job_id,
+        finding_title=title,
+        severity=severity,
+        agent_name=agent_name,
+        db_url=agent_state.db_url
     )
 
     return {

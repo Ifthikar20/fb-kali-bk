@@ -396,7 +396,7 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
 
         # Call the correct method based on orchestrator type
         if USE_DYNAMIC_AGENTS:
-            results = await orchestrator.run_scan(target, job_id)
+            results = await orchestrator.run_scan(target, job_id, db_url=db_url)
         else:
             results = await orchestrator.execute_pentest(target)
         
@@ -449,7 +449,7 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
         orchestrator = OrchestratorClass(org_elastic_ip)
 
         # Run dynamic scan
-        results = await orchestrator.run_scan(target, job_id)
+        results = await orchestrator.run_scan(target, job_id, db_url=db_url)
 
         # Store findings
         for finding_data in results.get('findings', []):
@@ -929,6 +929,31 @@ async def list_findings(
             }
             for finding in findings
         ]
+    }
+
+
+@app.get("/scan/{job_id}/logs")
+async def get_scan_logs(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Get execution logs for a scan (live updates during scan)"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Verify scan exists and belongs to organization
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Return execution logs (empty array if none yet)
+    return {
+        "job_id": job_id,
+        "logs": job.execution_logs or []
     }
 
 
