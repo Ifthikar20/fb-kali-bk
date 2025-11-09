@@ -646,10 +646,13 @@ async def get_job_report(
 async def start_dynamic_scan(
     scan_data: ScanCreate,
     background_tasks: BackgroundTasks,
-    org: Organization = Depends(verify_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Start a dynamic multi-agent security scan"""
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     from config import get_settings
     settings = get_settings()
 
@@ -686,10 +689,13 @@ async def start_dynamic_scan(
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Get scan status with findings"""
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
@@ -705,13 +711,13 @@ async def get_scan_status(
     formatted_findings = [
         {
             "title": f.title,
-            "severity": f.severity.value,
+            "severity": f.severity.value.lower(),  # Frontend expects lowercase
             "type": f.vulnerability_type,
-            "description": f.description,
-            "discovered_by": f.discovered_by,
-            "payload": f.payload,
-            "evidence": f.poc_code,
-            "url": f.url
+            "description": f.description or "",
+            "discovered_by": f.discovered_by or "Unknown",
+            "payload": f.payload or "",
+            "evidence": f.poc_code or "",
+            "url": f.url or ""
         }
         for f in findings
     ]
@@ -727,6 +733,8 @@ async def get_scan_status(
         "job_id": job.id,
         "status": job.status.value,
         "target": job.target,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "findings": formatted_findings,
         "total_findings": job.total_findings or len(findings),
         "critical_findings": job.critical_count or 0,
@@ -743,13 +751,44 @@ async def get_scan_status(
     return response
 
 
+@app.delete("/scan/{job_id}")
+async def delete_scan(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Delete a scan and all its findings"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Find the scan
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Delete associated findings first
+    db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
+
+    # Delete the scan
+    db.delete(job)
+    db.commit()
+
+    return {"message": "Scan deleted successfully"}
+
+
 @app.get("/scan/{job_id}/agent-graph")
 async def get_agent_graph(
     job_id: str,
-    org: Organization = Depends(verify_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Get agent hierarchy graph for visualization"""
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -805,18 +844,15 @@ async def list_scans(
         "offset": offset,
         "scans": [
             {
-                "id": scan.id,
+                "job_id": scan.id,  # Frontend expects job_id
                 "name": scan.name,
                 "target": scan.target,
                 "status": scan.status.value,
                 "created_at": scan.created_at.isoformat() if scan.created_at else None,
                 "started_at": scan.started_at.isoformat() if scan.started_at else None,
                 "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
-                "total_findings": scan.total_findings,
-                "critical_count": scan.critical_count,
-                "high_count": scan.high_count,
-                "medium_count": scan.medium_count,
-                "low_count": scan.low_count
+                "total_findings": scan.total_findings or 0,
+                "critical_findings": scan.critical_count or 0  # Frontend expects critical_findings
             }
             for scan in scans
         ]
@@ -894,6 +930,44 @@ async def list_findings(
             for finding in findings
         ]
     }
+
+
+@app.get("/scans/{scan_id}/findings")
+async def get_scan_findings(
+    scan_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Get all findings for a specific scan"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Verify scan exists and belongs to organization
+    scan = db.query(PentestJob).filter(
+        PentestJob.id == scan_id,
+        PentestJob.organization_id == org.id
+    ).first()
+
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Get findings
+    findings = db.query(Finding).filter(Finding.pentest_job_id == scan_id).all()
+
+    return [
+        {
+            "id": finding.id,
+            "pentest_job_id": finding.pentest_job_id,
+            "title": finding.title,
+            "description": finding.description or "",
+            "severity": finding.severity.value.lower(),  # Lowercase for frontend
+            "vulnerability_type": finding.vulnerability_type,
+            "url": finding.url or "",
+            "payload": finding.payload or "",
+            "discovered_by": finding.discovered_by or "Unknown",
+            "discovered_at": finding.discovered_at.isoformat() if finding.discovered_at else None
+        }
+        for finding in findings
+    ]
 
 
 @app.get("/health")
