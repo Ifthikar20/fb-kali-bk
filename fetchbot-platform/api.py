@@ -163,6 +163,35 @@ class Token(BaseModel):
     username: str
     organization_id: str
 
+def create_access_token(data: dict) -> str:
+    """Create JWT access token"""
+    settings = get_settings()
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(hours=24)  # Token expires in 24 hours
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.jwt_secret, algorithm="HS256")
+    return encoded_jwt
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security),
+                 db: Session = Depends(get_db)) -> User:
+    """Verify JWT token and return user"""
+    token = credentials.credentials
+    settings = get_settings()
+
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        user_id: str = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    return user
+
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
