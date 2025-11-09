@@ -94,47 +94,72 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
 
 @app.post("/api/organizations")
 async def create_organization(org_data: OrganizationCreate, db: Session = Depends(get_db)):
-    """Create organization with AWS EC2 instance"""
+    """Create organization with optional AWS EC2 instance"""
     slug = org_data.name.lower().replace(' ', '-')
-    
+
     existing = db.query(Organization).filter(Organization.slug == slug).first()
     if existing:
         raise HTTPException(status_code=400, detail="Organization exists")
-    
+
     org = Organization(
         name=org_data.name,
         slug=slug,
         admin_email=org_data.admin_email
     )
-    
+
     db.add(org)
     db.commit()
     db.refresh(org)
-    
-    try:
-        aws_manager = get_aws_manager()
-        infra = aws_manager.create_organization_infrastructure(org.name, org.id)
-        
-        org.ec2_instance_id = infra['instance_id']
-        org.elastic_ip = infra['elastic_ip']
-        org.elastic_ip_allocation_id = infra['allocation_id']
-        org.ec2_running = True
-        
+
+    # Try to create AWS infrastructure (optional for local testing)
+    settings = get_settings()
+    aws_enabled = settings.aws_access_key_id and settings.aws_secret_access_key and \
+                  settings.aws_access_key_id != "your_aws_access_key_id"
+
+    if aws_enabled:
+        try:
+            aws_manager = get_aws_manager()
+            infra = aws_manager.create_organization_infrastructure(org.name, org.id)
+
+            org.ec2_instance_id = infra['instance_id']
+            org.elastic_ip = infra['elastic_ip']
+            org.elastic_ip_allocation_id = infra['allocation_id']
+            org.ec2_running = True
+
+            db.commit()
+            db.refresh(org)
+
+            return {
+                'id': org.id,
+                'name': org.name,
+                'api_key': org.api_key,
+                'elastic_ip': org.elastic_ip,
+                'ec2_instance_id': org.ec2_instance_id,
+                'mode': 'aws'
+            }
+
+        except Exception as e:
+            # AWS failed, but keep organization for local testing
+            print(f"[WARNING] AWS infrastructure creation failed: {e}")
+            print("[INFO] Organization created in local-only mode")
+            org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
+            db.commit()
+            db.refresh(org)
+    else:
+        # No AWS configured - local testing mode
+        print("[INFO] AWS not configured - creating organization in local-only mode")
+        org.elastic_ip = "127.0.0.1"  # Use localhost for local testing
         db.commit()
         db.refresh(org)
-        
-        return {
-            'id': org.id,
-            'name': org.name,
-            'api_key': org.api_key,
-            'elastic_ip': org.elastic_ip,
-            'ec2_instance_id': org.ec2_instance_id
-        }
-        
-    except Exception as e:
-        db.delete(org)
-        db.commit()
-        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        'id': org.id,
+        'name': org.name,
+        'api_key': org.api_key,
+        'elastic_ip': org.elastic_ip,
+        'ec2_instance_id': org.ec2_instance_id,
+        'mode': 'local' if not aws_enabled else 'aws'
+    }
 
 @app.get("/api/organizations/me")
 async def get_my_organization(org: Organization = Depends(verify_api_key)):
