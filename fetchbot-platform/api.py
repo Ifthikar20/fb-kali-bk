@@ -1,10 +1,10 @@
 """FetchBot.ai REST API"""
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import asyncio
@@ -55,6 +55,51 @@ app.add_middleware(
 )
 
 security = HTTPBearer()
+
+# WebSocket connection manager for real-time event streaming
+class ConnectionManager:
+    """Manages WebSocket connections for real-time scan event streaming"""
+
+    def __init__(self):
+        # Dict[job_id, List[WebSocket]]
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, job_id: str):
+        """Accept WebSocket connection"""
+        await websocket.accept()
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = []
+        self.active_connections[job_id].append(websocket)
+        logger.info(f"[WEBSOCKET] Client connected for job {job_id}")
+
+    def disconnect(self, websocket: WebSocket, job_id: str):
+        """Remove WebSocket connection"""
+        if job_id in self.active_connections:
+            if websocket in self.active_connections[job_id]:
+                self.active_connections[job_id].remove(websocket)
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+        logger.info(f"[WEBSOCKET] Client disconnected from job {job_id}")
+
+    async def send_event(self, job_id: str, event: str, data: dict):
+        """Send event to all clients watching a job"""
+        if job_id not in self.active_connections:
+            return
+
+        message = {"event": event, "data": data}
+        disconnected = []
+
+        for connection in self.active_connections[job_id]:
+            try:
+                await connection.send_json(message)
+            except:
+                disconnected.append(connection)
+
+        for connection in disconnected:
+            self.disconnect(connection, job_id)
+
+# Global WebSocket manager
+ws_manager = ConnectionManager()
 
 # Lazy-load AWS manager only when needed (for EC2 deployments)
 _aws_manager = None
@@ -393,13 +438,32 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
         job.started_at = datetime.utcnow()
         db.commit()
 
+        # Send status update
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"🚀 Starting scan for {target}",
+            "level": "INFO"
+        })
+        await ws_manager.send_event(job_id, "status", {"status": "running"})
+
         # Create dynamic orchestrator
         orchestrator = OrchestratorClass(org_elastic_ip)
 
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "🤖 Initializing AI orchestrator...",
+            "level": "INFO"
+        })
+
         # Run dynamic scan
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "🔍 Launching security agents...",
+            "level": "INFO"
+        })
         results = await orchestrator.run_scan(target, job_id)
 
-        # Store findings
+        # Store findings and broadcast each one
         for finding_data in results.get('findings', []):
             finding = Finding(
                 pentest_job_id=job_id,
@@ -413,6 +477,14 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
             )
             db.add(finding)
 
+            # Broadcast finding
+            await ws_manager.send_event(job_id, "finding", {
+                "title": finding_data.get('title', 'Unknown'),
+                "severity": finding_data.get('severity', 'info'),
+                "type": finding_data.get('type', 'unknown'),
+                "url": finding_data.get('affected_url') or finding_data.get('url')
+            })
+
         job.status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
         job.completed_at = datetime.utcnow()
         job.total_findings = results.get('total_findings', len(results.get('findings', [])))
@@ -421,12 +493,36 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
 
         db.commit()
 
+        # Send completion event
+        await ws_manager.send_event(job_id, "completed", {
+            "status": job.status.value,
+            "total_findings": job.total_findings or 0,
+            "critical": job.critical_count or 0,
+            "high": job.high_count or 0
+        })
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"✅ Scan completed! Found {job.total_findings} vulnerabilities",
+            "level": "SUCCESS"
+        })
+
     except Exception as e:
         print(f"[DYNAMIC SCAN] Failed: {e}")
         import traceback
         traceback.print_exc()
         job.status = JobStatus.FAILED
         db.commit()
+
+        # Send error event
+        await ws_manager.send_event(job_id, "error", {
+            "status": "failed",
+            "error": str(e)
+        })
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"❌ Scan failed: {str(e)}",
+            "level": "ERROR"
+        })
     finally:
         db.close()
 
@@ -725,6 +821,45 @@ async def get_agent_graph(
             "error": str(e),
             "graph": {"nodes": [], "edges": []}
         }
+
+
+@app.websocket("/ws/scan/{job_id}")
+async def websocket_scan_stream(websocket: WebSocket, job_id: str):
+    """
+    WebSocket endpoint for real-time scan event streaming
+
+    Connect: ws://localhost:8000/ws/scan/{job_id}
+
+    Events sent to client:
+    - connected: Initial connection confirmation
+    - log: Scan progress logs
+    - status: Status changes (running, completed, failed)
+    - finding: New vulnerability discovered
+    - completed: Scan finished
+    - error: Scan failed
+    """
+    await ws_manager.connect(websocket, job_id)
+
+    try:
+        # Send initial connection message
+        await websocket.send_json({
+            "event": "connected",
+            "data": {"job_id": job_id, "message": "Connected to scan stream"}
+        })
+
+        # Keep connection alive and handle client messages
+        while True:
+            data = await websocket.receive_text()
+
+            # Client can request current status
+            if data == "ping":
+                await websocket.send_json({"event": "pong", "data": {}})
+
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, job_id)
+    except Exception as e:
+        logger.error(f"[WEBSOCKET] Error: {e}")
+        ws_manager.disconnect(websocket, job_id)
 
 
 @app.get("/health")
