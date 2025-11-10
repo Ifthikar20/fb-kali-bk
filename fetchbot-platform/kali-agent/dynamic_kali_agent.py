@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FetchBot Dynamic Kali Agent", version="3.0.0")
 
-# Get agent ID from environment
+# Get agent configuration from environment
 AGENT_ID = os.environ.get('AGENT_ID', 'kali-agent-unknown')
+TARGET_URL = os.environ.get('TARGET_URL', '')  # Default target for this agent
+JOB_ID = os.environ.get('JOB_ID', '')
 
 class ToolRequest(BaseModel):
     """Request to execute a specific tool"""
@@ -437,12 +439,24 @@ async def execute_tool(request: ToolRequest):
     return await agent.execute_tool(request.tool_name, request.parameters)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Log agent configuration on startup"""
+    logger.info(f"=== Dynamic Kali Agent Started ===")
+    logger.info(f"Agent ID: {AGENT_ID}")
+    logger.info(f"Target URL: {TARGET_URL if TARGET_URL else '(not set - will be provided via API)'}")
+    logger.info(f"Job ID: {JOB_ID if JOB_ID else '(not set)'}")
+    logger.info(f"================================")
+
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
         "agent_type": "dynamic-kali-agent",
         "agent_id": AGENT_ID,
+        "target_url": TARGET_URL if TARGET_URL else None,
+        "job_id": JOB_ID if JOB_ID else None,
         "version": "3.0.0"
     }
 
@@ -452,6 +466,8 @@ async def get_status():
     """Get agent status"""
     return {
         "agent_id": AGENT_ID,
+        "target_url": TARGET_URL if TARGET_URL else None,
+        "job_id": JOB_ID if JOB_ID else None,
         "status": "ready",
         "mode": "dynamic",
         "available_tools": [

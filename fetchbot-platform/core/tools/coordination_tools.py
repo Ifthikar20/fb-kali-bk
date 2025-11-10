@@ -58,11 +58,18 @@ def create_agent(
     # Create LLM config for new agent
     llm_config = LLMConfig(prompt_modules=module_list)
 
+    # Get next sandbox URL using round-robin distribution
+    sandbox_urls = getattr(agent_state, 'sandbox_urls', [agent_state.sandbox_url])
+    agent_graph = get_agent_graph()
+    num_agents = len(agent_graph.get_all_agents())
+    selected_sandbox_url = sandbox_urls[num_agents % len(sandbox_urls)]
+
     # Create agent configuration (inherit target from parent)
     agent_config = {
         "llm_config": llm_config,
         "max_iterations": 50,
-        "sandbox_url": agent_state.sandbox_url,
+        "sandbox_url": selected_sandbox_url,
+        "sandbox_urls": sandbox_urls,  # Pass all URLs to children
         "db_url": agent_state.db_url,
         "job_id": agent_state.job_id,
         "target": agent_state.target  # Propagate target to child agents
