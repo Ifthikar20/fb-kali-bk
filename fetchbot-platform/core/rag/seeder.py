@@ -14,6 +14,7 @@ import asyncio
 from typing import List, Dict, Any, Optional
 import uuid
 from datetime import datetime
+import json
 
 from .models import (
     CollectionType,
@@ -47,6 +48,30 @@ class KnowledgeBaseSeeder:
         self.vector_store = vector_store
 
         logger.info("Initialized KnowledgeBaseSeeder")
+
+    def _serialize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Serialize complex metadata values to JSON strings.
+        ChromaDB only accepts str, int, float, bool in metadata.
+
+        Args:
+            metadata: Original metadata dictionary
+
+        Returns:
+            Serialized metadata dictionary
+        """
+        serialized = {}
+        for key, value in metadata.items():
+            if isinstance(value, (dict, list)):
+                # Serialize dicts and lists to JSON strings
+                serialized[key] = json.dumps(value)
+            elif isinstance(value, (str, int, float, bool, type(None))):
+                # Keep simple types as-is (convert None to empty string)
+                serialized[key] = value if value is not None else ""
+            else:
+                # Convert other types to string
+                serialized[key] = str(value)
+        return serialized
 
     async def seed_all(self):
         """Seed all knowledge collections"""
@@ -86,7 +111,7 @@ class KnowledgeBaseSeeder:
                 texts_to_embed.append(doc_text)
 
                 # Create metadata
-                metadata = {
+                metadata = self._serialize_metadata({
                     "tool_name": tool['name'],
                     "category": self._categorize_tool(tool['name']),
                     "sandbox_execution": tool.get('sandbox_execution', False),
@@ -95,7 +120,7 @@ class KnowledgeBaseSeeder:
                     "use_cases": self._extract_use_cases(tool),
                     "prerequisites": self._extract_prerequisites(tool),
                     "mcp_tool": self._is_mcp_tool(tool['name'])
-                }
+                })
 
                 # Create document
                 doc = EmbeddingDocument(
@@ -227,11 +252,14 @@ class KnowledgeBaseSeeder:
             doc_text = self._create_vulnerability_pattern_document(pattern_data)
             texts_to_embed.append(doc_text)
 
+            # Serialize metadata (ChromaDB only accepts simple types)
+            serialized_metadata = self._serialize_metadata(pattern_data)
+
             # Create document
             doc = EmbeddingDocument(
                 id=f"vuln_pattern_{uuid.uuid4().hex[:8]}",
                 document=doc_text,
-                metadata=pattern_data,
+                metadata=serialized_metadata,
                 collection=CollectionType.VULNERABILITY_PATTERNS
             )
             documents.append(doc)
@@ -290,10 +318,13 @@ class KnowledgeBaseSeeder:
             doc_text = f"{strategy['title']}: {strategy['description']}"
             texts_to_embed.append(doc_text)
 
+            # Serialize metadata (ChromaDB only accepts simple types)
+            serialized_metadata = self._serialize_metadata(strategy)
+
             doc = EmbeddingDocument(
                 id=f"remediation_{uuid.uuid4().hex[:8]}",
                 document=doc_text,
-                metadata=strategy,
+                metadata=serialized_metadata,
                 collection=CollectionType.REMEDIATION_STRATEGIES
             )
             documents.append(doc)
@@ -349,10 +380,13 @@ class KnowledgeBaseSeeder:
             doc_text = f"{payload_data['vulnerability_type']} payload: {payload_data['payload']} - {payload_data['description']}"
             texts_to_embed.append(doc_text)
 
+            # Serialize metadata (ChromaDB only accepts simple types)
+            serialized_metadata = self._serialize_metadata(payload_data)
+
             doc = EmbeddingDocument(
                 id=f"payload_{uuid.uuid4().hex[:8]}",
                 document=doc_text,
-                metadata=payload_data,
+                metadata=serialized_metadata,
                 collection=CollectionType.PAYLOAD_LIBRARY
             )
             documents.append(doc)
