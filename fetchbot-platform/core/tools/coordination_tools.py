@@ -76,13 +76,39 @@ def create_agent(
     }
 
     # Enhance task with explicit target URL to prevent LLM from hallucinating example.com
-    enhanced_task = f"""TARGET: {agent_state.target}
+    # Extract domain from target for clarity
+    import re
+    target_url = agent_state.target
+    domain_match = re.search(r'https?://([^/]+)', target_url)
+    domain = domain_match.group(1) if domain_match else target_url
+
+    enhanced_task = f"""🎯 TARGET: {target_url}
+🎯 DOMAIN: {domain}
 
 {task}
 
-CRITICAL: You MUST test ONLY the target URL specified above: {agent_state.target}
-Do NOT use example.com or any other placeholder URLs in your tool invocations.
-Always use the actual target URL ({agent_state.target}) when calling security testing tools."""
+⚠️ CRITICAL INSTRUCTIONS - READ CAREFULLY:
+
+1. The ONLY URL you are authorized to test is: {target_url}
+2. When calling ANY security testing tool, you MUST use: {target_url}
+3. DO NOT use example.com, test.com, or any fictional URLs
+4. DO NOT make up endpoints - use the real target: {target_url}
+5. If testing specific paths, use: {target_url}/path (never example.com/path)
+6. For domain-based tools (like nmap), use: {domain}
+
+EXAMPLES OF CORRECT USAGE:
+✅ http_scan(url="{target_url}")
+✅ sql_injection_test(url="{target_url}/api/users")
+✅ xss_test(url="{target_url}/search")
+✅ nmap_scan(target="{domain}")
+
+EXAMPLES OF INCORRECT USAGE (DO NOT DO THIS):
+❌ http_scan(url="https://example.com")
+❌ sql_injection_test(url="https://example.com/api/users")
+❌ xss_test(url="https://test.com/search")
+
+Your target is: {target_url}
+Test ONLY this target. Begin your security testing NOW."""
 
     # Create new agent
     new_agent = BaseAgent(
