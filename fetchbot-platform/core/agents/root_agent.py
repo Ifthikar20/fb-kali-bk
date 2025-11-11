@@ -69,12 +69,33 @@ class RootAgent(BaseAgent):
             "target": target  # Target URL/domain
         }
 
+        # Create explicit task with target emphasized
+        task = f"""
+You are the ROOT COORDINATOR for a comprehensive security assessment.
+
+TARGET: {target}
+
+CRITICAL: You MUST use this EXACT target URL in ALL operations:
+- When creating agents, pass them this target: {target}
+- When agents call tools, they should use this target: {target}
+- DO NOT use example.com, betterandbliss.com, or any other URL
+- The ONLY valid target for this scan is: {target}
+
+Your job:
+1. Perform initial reconnaissance to understand the target
+2. Create specialized agents based on what you discover
+3. Coordinate agents and aggregate their findings
+4. Generate final security assessment report
+
+Remember: ALWAYS use {target} - no other URL is valid for this scan.
+"""
+
         super().__init__(
             config=config,
             agent_id=job_id,  # Use job_id as root agent ID
             parent_id=None,  # No parent - this is root
             name="Root Coordinator",
-            task=f"Conduct comprehensive security assessment of {target}"
+            task=task
         )
 
         self.target = target
@@ -152,7 +173,7 @@ TARGET: {self.target}
 JOB ID: {self.job_id}
 
 YOUR MISSION:
-Conduct a thorough security assessment by creating and coordinating specialized agents.
+Conduct a THOROUGH, METHODICAL security assessment. Take your time. Be complete.
 You do NOT perform scans directly - you delegate to specialized agents.
 
 STRATEGY:
@@ -220,13 +241,26 @@ STRATEGY:
    REMINDER: finish_scan triggers container cleanup! Only call it when 100% done.
 
 IMPORTANT RULES:
-- Do NOT use scanning tools yourself - create agents for that
-- Create agents with SPECIFIC tasks and relevant modules
-- Name agents clearly (e.g., "API Fuzzing Agent", "SQL Injection Agent")
-- Wait for reconnaissance before creating specialized agents
-- Use tool invocations to create agents and check status
 
-BEGIN by creating a reconnaissance agent to discover the target's attack surface.
+1. **PATIENCE** - Don't rush. Scans take time. Wait for completion.
+2. **SEQUENTIAL** - Finish one phase before starting next
+3. **THOROUGH** - Test everything before finishing
+4. **VISIBLE** - User sees each step in UI via agent logs
+5. **METHODICAL** - One discovery leads to next investigation
+6. **COMPLETE** - Only finish_scan when nothing left to test
+
+AVAILABLE TOOLS FOR AGENTS:
+- Reconnaissance: nmap_scan, http_scan, dns_enumerate, service_detection
+- Discovery: directory fuzzing, subdomain enumeration
+- Testing: sql_injection_test, xss_test, api_fuzzing, api_idor_test, auth testing
+- Analysis: javascript_analysis, security_headers_check
+
+AVAILABLE PROMPT MODULES:
+Give agents expertise: sql_injection, xss, api_testing, authentication
+
+BEGIN by creating ONE reconnaissance agent. Wait for their results. Then think carefully about what to do next.
+
+Remember: THOROUGH and VISIBLE beats FAST and HIDDEN.
 """
 
         return task

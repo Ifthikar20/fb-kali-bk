@@ -296,7 +296,7 @@ def agent_finish(
     }
 
 
-@register_tool(sandbox_execution=False, description="Create vulnerability report")
+@register_tool(sandbox_execution=False, description="Create detailed vulnerability report with evidence")
 def create_vulnerability_report(
     agent_state,
     title: str,
@@ -309,17 +309,29 @@ def create_vulnerability_report(
     affected_url: str = ""
 ) -> Dict[str, Any]:
     """
-    Create a detailed vulnerability report
+    Create a detailed vulnerability report with ACTUAL EVIDENCE from your scans
 
     Args:
-        title: Short title of the vulnerability
+        title: Short, specific title (e.g., "SQL Injection in /api/users?id= parameter")
         severity: CRITICAL, HIGH, MEDIUM, LOW, INFO
         vulnerability_type: Type (SQL_INJECTION, XSS, CSRF, IDOR, etc.)
-        description: Detailed description of the vulnerability
-        payload: Attack payload used
-        evidence: Proof of exploitation (responses, screenshots, etc.)
-        remediation: Recommended fix
-        affected_url: URL or endpoint affected
+        description: Detailed description explaining:
+                    - What you tested
+                    - What payload you used
+                    - What response you received
+                    - Why this is a security issue
+        payload: EXACT attack payload that worked (e.g., "' OR '1'='1' --")
+        evidence: ACTUAL results from the tool:
+                 - HTTP status codes
+                 - Error messages returned
+                 - Response headers
+                 - Database errors
+                 - Script execution proof
+                 Example: "Server returned: 'mysql error: syntax error near 1=1'"
+        remediation: Recommended fix (input validation, parameterized queries, etc.)
+        affected_url: Complete URL tested (e.g., "https://target.com/api/users?id=1")
+
+    IMPORTANT: Include REAL scan results, not generic descriptions!
 
     Returns:
         Report creation status
@@ -328,6 +340,93 @@ def create_vulnerability_report(
     valid_severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
     if severity.upper() not in valid_severities:
         severity = "MEDIUM"
+
+    # CRITICAL: Reject reports without evidence for CRITICAL/HIGH findings
+    # This prevents hallucinated vulnerabilities
+    if severity.upper() in ["CRITICAL", "HIGH"]:
+        if not payload or not evidence:
+            error_msg = (
+                f"REJECTED: Cannot report {severity} vulnerability without proof!\n"
+                f"Missing: {'payload' if not payload else ''} {'evidence' if not evidence else ''}\n"
+                f"You MUST include:\n"
+                f"  - payload: The exact attack string you used\n"
+                f"  - evidence: The actual tool output showing the vulnerability\n"
+                f"If you cannot provide these, the vulnerability is not confirmed."
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to missing evidence"
+            }
+
+        # Validate evidence is not generic/templated
+        generic_phrases = [
+            "likely vulnerable", "possibly vulnerable", "may be vulnerable",
+            "could be exploited", "potentially exploitable", "appears to be",
+            "seems to", "might contain", "could contain"
+        ]
+        evidence_lower = evidence.lower()
+        if any(phrase in evidence_lower for phrase in generic_phrases):
+            error_msg = (
+                f"REJECTED: Evidence contains generic/uncertain language!\n"
+                f"Evidence must show ACTUAL tool results, not assumptions.\n"
+                f"Include: HTTP status codes, error messages, response bodies, etc."
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to generic evidence"
+            }
+
+    # CRITICAL: Validate affected_url matches the scan target
+    # This prevents reporting vulnerabilities for placeholder/wrong domains
+    if affected_url and agent_state.target:
+        from urllib.parse import urlparse
+
+        # Extract domain from scan target
+        target_domain = urlparse(agent_state.target).netloc.lower()
+
+        # Extract domain from affected URL
+        affected_domain = urlparse(affected_url).netloc.lower()
+
+        # Check for placeholder domains that should NEVER appear in reports
+        forbidden_domains = [
+            "actual-target.com", "actual-target-domain.com",
+            "actual-scan-target.com", "example.com", "example.org",
+            "betterandbliss.com", "betterandblissnew.com",
+            "your-target.com", "target.com", "test.com"
+        ]
+
+        if affected_domain in forbidden_domains:
+            error_msg = (
+                f"REJECTED: Affected URL contains placeholder domain: {affected_domain}\n"
+                f"You used: {affected_url}\n"
+                f"You MUST use the actual scan target: {agent_state.target}\n"
+                f"This is not a real vulnerability - you're reporting against a fake URL!"
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to placeholder URL"
+            }
+
+        # Validate affected domain matches target domain
+        if affected_domain != target_domain:
+            error_msg = (
+                f"REJECTED: Affected URL domain doesn't match scan target!\n"
+                f"Scan target: {agent_state.target} (domain: {target_domain})\n"
+                f"Affected URL: {affected_url} (domain: {affected_domain})\n"
+                f"You can only report vulnerabilities for the target you're scanning!"
+            )
+            logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+            return {
+                "status": "rejected",
+                "error": error_msg,
+                "message": "Vulnerability report rejected due to domain mismatch"
+            }
 
     finding = {
         "title": title,

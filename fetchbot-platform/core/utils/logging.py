@@ -75,22 +75,67 @@ def add_execution_log(
 
 
 def log_agent_created(job_id: str, agent_name: str, parent_agent: str, db_url: Optional[str] = None):
-    """Log agent creation"""
+    """Log agent creation with descriptive message showing invocation chain"""
+
+    # Map agent types to descriptive purposes
+    agent_purposes = {
+        "Reconnaissance Agent": "to discover target architecture and technologies",
+        "SQL Injection Agent": "to test for SQL injection vulnerabilities",
+        "XSS Testing Agent": "to test for cross-site scripting vulnerabilities",
+        "API Security Agent": "to test API endpoints for security issues",
+        "Authentication Testing Agent": "to test authentication and authorization mechanisms",
+        "Focused Reconnaissance Agent": "to perform targeted reconnaissance",
+        "Comprehensive Reconnaissance Agent": "to perform deep reconnaissance",
+        "File Upload Testing Agent": "to test file upload functionality for vulnerabilities",
+        "Directory Traversal Agent": "to test for directory traversal vulnerabilities",
+        "Command Injection Agent": "to test for command injection vulnerabilities",
+    }
+
+    # Get purpose or use generic message
+    purpose = agent_purposes.get(agent_name, "to perform specialized security testing")
+
+    # Show agent invocation chain: Parent → Child
     add_execution_log(
         job_id=job_id,
-        action=f"Created {agent_name}",
-        details=f"Agent spawned by {parent_agent}",
+        action=f"🤖 Agent Created: [{parent_agent}] → [{agent_name}]",
+        details=f"{parent_agent} spawned '{agent_name}' {purpose}",
         agent=parent_agent,
         db_url=db_url
     )
 
 
 def log_tool_execution(job_id: str, tool_name: str, agent_name: str, target: str, db_url: Optional[str] = None):
-    """Log tool execution"""
+    """Log tool execution with user-friendly descriptions"""
+
+    # Map tool names to descriptive actions
+    tool_descriptions = {
+        "nmap_scan": ("🔍 Port Scanning", f"Scanning {target} to discover open ports and running services"),
+        "http_scan": ("🌐 Web Analysis", f"Analyzing website structure and technologies at {target}"),
+        "dns_enumerate": ("📡 DNS Discovery", f"Enumerating DNS records and subdomains for {target}"),
+        "resolve_domain": ("🔎 Domain Resolution", f"Resolving {target} to IP address"),
+        "javascript_analysis": ("📜 JavaScript Scan", f"Analyzing JavaScript files at {target} for sensitive data"),
+        "security_headers_check": ("🛡️ Security Headers", f"Checking security headers at {target}"),
+        "sql_injection_test": ("💉 SQL Injection Test", f"Testing {target} for SQL injection vulnerabilities"),
+        "xss_test": ("⚠️ XSS Testing", f"Testing {target} for cross-site scripting vulnerabilities"),
+        "api_fuzzing": ("🎯 API Fuzzing", f"Fuzzing API endpoints at {target} with malicious payloads"),
+        "api_brute_force": ("🔐 Auth Testing", f"Testing authentication mechanisms at {target}"),
+        "api_idor_test": ("🔓 IDOR Testing", f"Testing for insecure direct object references at {target}"),
+        "api_rate_limit_test": ("⏱️ Rate Limit Check", f"Checking rate limiting implementation at {target}"),
+        "api_privilege_escalation_test": ("🔺 Privilege Test", f"Testing for privilege escalation at {target}"),
+        "detect_exposed_env_vars": ("🔑 Secrets Detection", f"Scanning {target} for exposed environment variables"),
+        "service_detection": ("🔧 Service Detection", f"Identifying services running on {target}"),
+    }
+
+    # Get description or use default
+    action, details = tool_descriptions.get(
+        tool_name,
+        (f"Running {tool_name}", f"Executing {tool_name} on {target}")
+    )
+
     add_execution_log(
         job_id=job_id,
-        action=f"Executing {tool_name}",
-        details=f"Running {tool_name} on {target}",
+        action=action,
+        details=details,
         agent=agent_name,
         db_url=db_url
     )
@@ -129,9 +174,20 @@ def log_finding_discovered(
 
 def log_scan_status(job_id: str, status: str, details: str, db_url: Optional[str] = None):
     """Log scan status change"""
+
+    # Status emojis
+    status_icons = {
+        "started": "🚀",
+        "running": "⚡",
+        "completed": "✅",
+        "failed": "❌"
+    }
+
+    icon = status_icons.get(status.lower(), "📊")
+
     add_execution_log(
         job_id=job_id,
-        action=f"Scan status: {status}",
+        action=f"{icon} Scan {status.title()}",
         details=details,
         agent="System",
         db_url=db_url

@@ -2,17 +2,30 @@
 Tool Execution System
 
 Handles executing tools either locally (coordination tools) or in sandbox (scanning tools)
+Supports both HTTP and MCP (Model Context Protocol) execution modes.
 """
 
 import httpx
 import asyncio
 import logging
+import os
 from typing import Dict, Any, Optional
 from .registry import get_tool, _TOOL_REGISTRY
 from ..utils.logging import log_tool_execution
 from ..agents.agent_graph import get_agent_graph
 
 logger = logging.getLogger(__name__)
+
+# Check if MCP mode is enabled
+USE_MCP = os.getenv('USE_MCP', 'false').lower() == 'true'
+
+if USE_MCP:
+    try:
+        from .mcp_executor import execute_tool_via_mcp
+        logger.info("MCP mode enabled - will use Model Context Protocol for tool execution")
+    except ImportError:
+        logger.warning("MCP mode requested but mcp_executor not available, falling back to HTTP")
+        USE_MCP = False
 
 
 class ToolExecutionError(Exception):
@@ -136,10 +149,16 @@ async def _execute_in_sandbox(
     **kwargs
 ) -> Any:
     """
-    Execute tool in Docker sandbox
+    Execute tool in Docker sandbox or via MCP
 
-    Makes HTTP request to kali-agent tool server
+    Uses MCP (Model Context Protocol) if USE_MCP=true, otherwise HTTP to kali-agent tool server
     """
+    # Use MCP protocol if enabled
+    if USE_MCP:
+        logger.debug(f"Routing {tool_name} to MCP server")
+        return await execute_tool_via_mcp(tool_name, agent_state, **kwargs)
+
+    # Otherwise use HTTP (existing implementation)
     # Get sandbox info from agent state
     sandbox_url = agent_state.get("sandbox_url", "http://kali-agent-1:9000")
     auth_token = agent_state.get("auth_token")
