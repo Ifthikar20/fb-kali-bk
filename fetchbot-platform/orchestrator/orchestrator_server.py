@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -60,6 +61,20 @@ app = FastAPI(
     title="Specialized Agent Orchestrator",
     version="1.0.0",
     description="Coordinates specialized security testing agents"
+)
+
+# Add CORS middleware for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:8080",  # Frontend dev server
+        "http://localhost:3000",  # Alternative React dev port
+        "https://yourdomain.com", # Production frontend
+        "*"  # Allow all origins (remove in production)
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
 # Global orchestrator instance (will be set per scan)
