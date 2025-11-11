@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
 Create admin user for FetchBot.ai
+
+Usage:
+  # Make sure to activate your venv first!
+  source venv/bin/activate  # or 'venv\Scripts\activate' on Windows
+  python scripts/create_admin_user.py
 """
 import sys
 import os
 
 # Add parent directory to path so we can import models
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Set DATABASE_URL for local development if not already set
+if 'DATABASE_URL' not in os.environ:
+    os.environ['DATABASE_URL'] = 'postgresql://fetchbot:fetchbot123@localhost:5432/fetchbot'
+    print("Note: Using default DATABASE_URL for localhost")
 
 from models import get_db, Organization, User
 import secrets
