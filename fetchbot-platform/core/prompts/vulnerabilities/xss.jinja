@@ -111,10 +111,13 @@ Good PoC should show:
 3. Screenshot or output showing execution
 4. Potential attack scenario (e.g., "Can steal admin session cookie")
 
-**Example:**
+**Example Format (DO NOT USE example.com - use your actual target URL):**
 ```
-URL: https://example.com/search?q=test
+URL: [Your target URL]/search?q=test
 Payload: <img src=x onerror=alert(document.cookie)>
 Result: Alert box showing: session=abc123; user=admin
 Impact: Attacker can steal session cookies via phishing link
 ```
+
+⚠️ **IMPORTANT**: The above is just a documentation example showing the STRUCTURE of a PoC.
+Replace [Your target URL] with the ACTUAL target URL specified in your task.
