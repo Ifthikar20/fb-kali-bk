@@ -641,6 +641,278 @@ class DynamicKaliAgent:
 
         return results
 
+    async def recursive_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Professional recursive web fuzzing - keeps digging until findings are complete
+
+        Returns results to Claude for analysis instead of auto-reporting vulnerabilities
+        """
+        url = params.get('url', '')
+        max_depth = params.get('max_depth', 3)
+        wordlist_name = params.get('wordlist', 'common')
+        extensions = params.get('extensions', '')
+        follow_redirects = params.get('follow_redirects', True)
+
+        results = {
+            "tool": "recursive_fuzz",
+            "url": url,
+            "max_depth": max_depth,
+            "discovered_paths": [],
+            "interesting_findings": [],
+            "depth_map": {},
+            "total_requests": 0,
+            "analysis_needed": True  # Claude must analyze
+        }
+
+        try:
+            # Map wordlist names to files
+            wordlist_map = {
+                "common": "/usr/share/wordlists/common.txt",
+                "medium": "/usr/share/wordlists/big.txt",
+                "large": "/usr/share/wordlists/dirlist.txt"
+            }
+            wordlist_path = wordlist_map.get(wordlist_name, "/usr/share/wordlists/common.txt")
+
+            # Prepare base domain
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+            async def fuzz_path(path: str, current_depth: int):
+                """Recursively fuzz a path"""
+                if current_depth > max_depth:
+                    return
+
+                fuzz_url = f"{base_url}{path}/FUZZ"
+                if path == "":
+                    fuzz_url = f"{base_url}/FUZZ"
+
+                # Build ffuf command
+                cmd = [
+                    'ffuf',
+                    '-u', fuzz_url,
+                    '-w', wordlist_path,
+                    '-t', '20',  # 20 threads for speed
+                    '-mc', '200,201,202,204,301,302,307,401,403',
+                    '-fc', '404',  # Filter 404s
+                    '-o', '/tmp/ffuf_recursive.json',
+                    '-of', 'json',
+                    '-maxtime', '120',  # 2 min max per path
+                    '-s'  # Silent mode
+                ]
+
+                # Add extensions if provided
+                if extensions:
+                    cmd.extend(['-e', extensions])
+
+                # Run ffuf
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+                await proc.wait()
+
+                # Parse results
+                try:
+                    import json
+                    with open('/tmp/ffuf_recursive.json', 'r') as f:
+                        ffuf_data = json.load(f)
+
+                    for result in ffuf_data.get('results', []):
+                        found_url = result['url']
+                        status = result['status']
+                        size = result['length']
+
+                        discovered_path = {
+                            "url": found_url,
+                            "status": status,
+                            "size": size,
+                            "depth": current_depth
+                        }
+
+                        results["discovered_paths"].append(discovered_path)
+                        results["total_requests"] += 1
+
+                        # Track depth
+                        results["depth_map"][found_url] = current_depth
+
+                        # Identify interesting responses
+                        if status in [200, 403, 401]:
+                            results["interesting_findings"].append({
+                                "url": found_url,
+                                "status": status,
+                                "reason": self._analyze_response_interest(status, found_url)
+                            })
+
+                        # Recurse into directories (200, 301, 403)
+                        if status in [200, 301, 302, 403] and current_depth < max_depth:
+                            # Extract path from URL
+                            new_path = found_url.replace(base_url, '')
+                            await fuzz_path(new_path, current_depth + 1)
+
+                except FileNotFoundError:
+                    pass  # No results file means no findings
+
+            # Start recursive fuzzing from root
+            await fuzz_path("", 1)
+
+            # Add summary for Claude
+            results["summary"] = {
+                "total_paths": len(results["discovered_paths"]),
+                "interesting_count": len(results["interesting_findings"]),
+                "max_depth_reached": max(results["depth_map"].values()) if results["depth_map"] else 0,
+                "needs_manual_review": len(results["interesting_findings"]) > 0
+            }
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    def _analyze_response_interest(self, status: int, url: str) -> str:
+        """Analyze why a response is interesting"""
+        reasons = []
+
+        if status == 403:
+            reasons.append("Forbidden - potential hidden admin/config area")
+        if status == 401:
+            reasons.append("Unauthorized - authentication required")
+        if status == 200:
+            if any(word in url.lower() for word in ['admin', 'config', 'backup', '.env', '.sql', '.bak']):
+                reasons.append("Sensitive filename pattern detected")
+
+        return "; ".join(reasons) if reasons else "Successful response"
+
+    async def adaptive_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Adaptive fuzzing that adjusts based on findings"""
+        url = params.get('url', '')
+        initial_wordlist = params.get('initial_wordlist', 'common')
+        enable_smart_extensions = params.get('enable_smart_extensions', True)
+        stop_on_waf = params.get('stop_on_waf', True)
+
+        results = {
+            "tool": "adaptive_fuzz",
+            "url": url,
+            "discovered_content": [],
+            "technology_detected": [],
+            "waf_detected": False,
+            "forbidden_paths": [],
+            "backup_files": [],
+            "claude_analysis_request": True
+        }
+
+        try:
+            # First, detect technology
+            import httpx
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                resp = await client.get(url)
+
+                # Detect tech stack from headers and content
+                server_header = resp.headers.get('server', '').lower()
+                x_powered_by = resp.headers.get('x-powered-by', '').lower()
+
+                if 'php' in server_header or 'php' in x_powered_by or '.php' in resp.text[:1000]:
+                    results["technology_detected"].append("PHP")
+                if 'asp.net' in x_powered_by or 'iis' in server_header:
+                    results["technology_detected"].append("ASP.NET")
+                if 'nginx' in server_header:
+                    results["technology_detected"].append("Nginx")
+                if 'apache' in server_header:
+                    results["technology_detected"].append("Apache")
+
+            # Use recursive_fuzz with smart extensions
+            smart_extensions = ""
+            if enable_smart_extensions and "PHP" in results["technology_detected"]:
+                smart_extensions = "php,php3,php4,php5,phtml,inc"
+            elif enable_smart_extensions and "ASP.NET" in results["technology_detected"]:
+                smart_extensions = "asp,aspx,asmx,ashx,config"
+
+            # Call recursive fuzzing
+            fuzz_results = await self.recursive_fuzz({
+                "url": url,
+                "max_depth": 2,
+                "wordlist": initial_wordlist,
+                "extensions": smart_extensions,
+                "follow_redirects": True
+            })
+
+            # Categorize results
+            for finding in fuzz_results.get("discovered_paths", []):
+                url_path = finding["url"]
+                status = finding["status"]
+
+                if status == 403:
+                    results["forbidden_paths"].append(url_path)
+
+                if any(ext in url_path.lower() for ext in ['.bak', '.sql', '.tar.gz', '.zip', '.old', '~']):
+                    results["backup_files"].append(url_path)
+
+            results["discovered_content"] = fuzz_results.get("discovered_paths", [])
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def targeted_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Targeted fuzzing for specific vulnerability types"""
+        url = params.get('url', '')
+        fuzz_type = params.get('fuzz_type', 'backup_files')
+        custom_payloads = params.get('custom_payloads', [])
+
+        # Predefined payloads for each type
+        payload_map = {
+            "backup_files": ['.bak', '.sql', '.tar.gz', '.zip', '.old', '~', '.swp', '.save'],
+            "config_files": ['.env', 'config.php', 'web.config', 'application.properties', 'settings.py'],
+            "admin_panels": ['admin', 'administrator', 'wp-admin', 'cpanel', 'phpmyadmin', 'admin.php'],
+            "api_endpoints": ['/api', '/v1', '/v2', '/graphql', '/rest', '/swagger', '/openapi.json'],
+            "debug_endpoints": ['/debug', '/test', '/_profiler', '/actuator', '/.well-known'],
+            "source_disclosure": ['.git', '.svn', '.DS_Store', '.htaccess', 'web.config', '.npmrc']
+        }
+
+        payloads = custom_payloads if custom_payloads else payload_map.get(fuzz_type, [])
+
+        results = {
+            "tool": "targeted_fuzz",
+            "url": url,
+            "fuzz_type": fuzz_type,
+            "findings": [],
+            "security_impact": {},
+            "claude_confirmation_needed": True
+        }
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                for payload in payloads:
+                    test_url = f"{url.rstrip('/')}/{payload.lstrip('/')}"
+
+                    try:
+                        resp = await client.get(test_url)
+                        if resp.status_code in [200, 403, 401]:
+                            results["findings"].append({
+                                "url": test_url,
+                                "status": resp.status_code,
+                                "payload": payload,
+                                "size": len(resp.content)
+                            })
+
+                            # Estimate security impact
+                            if resp.status_code == 200:
+                                results["security_impact"][test_url] = "HIGH - Publicly accessible"
+                            elif resp.status_code == 403:
+                                results["security_impact"][test_url] = "MEDIUM - Exists but access denied"
+
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
 
 # Create agent instance
 agent = DynamicKaliAgent(AGENT_ID)
@@ -688,7 +960,8 @@ async def get_status():
             "javascript_analysis", "security_headers_check", "sql_injection_test",
             "xss_test", "api_fuzzing", "api_brute_force", "api_idor_test",
             "api_rate_limit_test", "api_privilege_escalation_test", "detect_exposed_env_vars",
-            "ffuf_scan", "gobuster_scan"
+            "ffuf_scan", "gobuster_scan",
+            "recursive_fuzz", "adaptive_fuzz", "targeted_fuzz"
         ]
     }
 

@@ -77,7 +77,12 @@ class DynamicContainerManager:
         base_port: int = 9100
     ) -> List[Dict[str, Any]]:
         """
-        Spawn dynamic Kali agent containers for a scan
+        Spawn dynamic Kali agent containers for a scan with DIVERSE tool specializations
+
+        Each agent gets a different profile to distribute tools and capabilities:
+        - Agent 1: Web fuzzing specialist (ffuf, gobuster, dirb)
+        - Agent 2: SQL/Database specialist (sqlmap, nosql injection)
+        - Agent 3: API/Network specialist (nmap, masscan, API tools)
 
         Args:
             job_id: Unique job identifier (used in container names)
@@ -88,7 +93,26 @@ class DynamicContainerManager:
         Returns:
             List of agent info dictionaries with container_id, agent_url, container_name
         """
-        logger.info(f"Spawning {num_agents} Kali agents for job {job_id} targeting {target_url}")
+        logger.info(f"Spawning {num_agents} SPECIALIZED Kali agents for job {job_id} targeting {target_url}")
+
+        # Define agent profiles with different tool specializations
+        agent_profiles = [
+            {
+                "profile": "WEB_FUZZER",
+                "specialization": "Web Fuzzing & Directory Discovery",
+                "preferred_tools": ["ffuf_scan", "gobuster_scan", "directory_enumeration", "nikto_scan"]
+            },
+            {
+                "profile": "SQL_SPECIALIST",
+                "specialization": "Database & Injection Testing",
+                "preferred_tools": ["sql_injection_test", "sqlmap_test", "nosql_injection_test", "database_enumeration"]
+            },
+            {
+                "profile": "API_NETWORK",
+                "specialization": "API & Network Security",
+                "preferred_tools": ["nmap_detailed_scan", "api_fuzzing", "api_idor_test", "api_brute_force"]
+            }
+        ]
 
         agents = []
         containers_to_cleanup = []
@@ -102,9 +126,15 @@ class DynamicContainerManager:
                 container_name = f"kali-agent-{job_id}-{agent_num}"
                 host_port = base_port + i
 
-                logger.info(f"Starting container {container_name} on port {host_port}")
+                # Assign profile (cycle through profiles if more agents than profiles)
+                profile = agent_profiles[i % len(agent_profiles)]
 
-                # Spawn container
+                logger.info(
+                    f"Starting container {container_name} on port {host_port} "
+                    f"[{profile['specialization']}]"
+                )
+
+                # Spawn container with profile
                 container = self.client.containers.run(
                     image="fetchbot-kali-agent:latest",
                     name=container_name,
@@ -112,7 +142,9 @@ class DynamicContainerManager:
                         "AGENT_ID": container_name,
                         "AGENT_PORT": "9000",
                         "TARGET_URL": target_url,
-                        "JOB_ID": job_id
+                        "JOB_ID": job_id,
+                        "AGENT_PROFILE": profile["profile"],  # NEW: Agent specialization
+                        "SPECIALIZATION": profile["specialization"]
                     },
                     ports={"9000/tcp": host_port},
                     network=self.network_name,
@@ -122,7 +154,8 @@ class DynamicContainerManager:
                     labels={
                         "job_id": job_id,
                         "component": "kali-agent",
-                        "managed_by": "fetchbot-dynamic"
+                        "managed_by": "fetchbot-dynamic",
+                        "profile": profile["profile"]
                     }
                 )
 
@@ -136,10 +169,16 @@ class DynamicContainerManager:
                     "container_name": container_name,
                     "agent_url": agent_url,
                     "host_port": host_port,
-                    "target_url": target_url
+                    "target_url": target_url,
+                    "profile": profile["profile"],
+                    "specialization": profile["specialization"],
+                    "preferred_tools": profile["preferred_tools"]
                 })
 
-                logger.info(f"Container {container_name} started: {container.id[:12]}")
+                logger.info(
+                    f"Container {container_name} started: {container.id[:12]} "
+                    f"[{profile['specialization']}]"
+                )
 
             # Wait for all agents to become healthy
             await self._wait_for_agents_health(agents, timeout=120)
