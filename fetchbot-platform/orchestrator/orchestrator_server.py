@@ -213,15 +213,19 @@ async def get_work(request: WorkRequest):
                 work_item["job_id"] = job_id
 
                 return {
-                    "work_item": work_item
+                    "work_item": work_item,
+                    "active_scans": len(active_orchestrators),
+                    "scan_active": True
                 }
 
         except Exception as e:
             logger.error(f"Error getting work from orchestrator {job_id}: {e}")
 
-    # No work available
+    # No work available - tell agents if scans are active or idle
     return {
-        "work_item": None
+        "work_item": None,
+        "active_scans": len(active_orchestrators),
+        "scan_active": len(active_orchestrators) > 0
     }
 
 

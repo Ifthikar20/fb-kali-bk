@@ -117,13 +117,23 @@ class BaseSpecializedAgent(ABC):
         while self.running:
             try:
                 # Pull next work item from orchestrator
-                work_item = await self._get_work()
+                work_response = await self._get_work()
 
-                if not work_item:
-                    # No work available, wait and retry
-                    logger.debug(f"[{self.agent_id}] No work available, waiting...")
-                    await asyncio.sleep(2)
+                if not work_response or not work_response.get("work_item"):
+                    # No work available - check if scans are active
+                    scan_active = work_response.get("scan_active", False) if work_response else False
+
+                    if scan_active:
+                        # Scans are active but no work for us yet - poll actively
+                        await asyncio.sleep(2)
+                    else:
+                        # No active scans - enter idle mode (poll every 30s)
+                        logger.debug(f"[{self.agent_id}] No active scans, entering idle mode...")
+                        await asyncio.sleep(30)
+
                     continue
+
+                work_item = work_response["work_item"]
 
                 # Execute work item
                 logger.info(
@@ -151,7 +161,7 @@ class BaseSpecializedAgent(ABC):
         Pull next work item from orchestrator
 
         Returns:
-            Work item dict or None if no work available
+            Response dict with work_item and scan status, or None on error
         """
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -164,11 +174,11 @@ class BaseSpecializedAgent(ABC):
                 )
 
                 if response.status_code == 200:
-                    data = response.json()
-                    return data.get("work_item")
+                    # Return full response (includes work_item, active_scans, scan_active)
+                    return response.json()
                 elif response.status_code == 204:
                     # No work available
-                    return None
+                    return {"work_item": None, "scan_active": False}
                 else:
                     logger.error(
                         f"[{self.agent_id}] Failed to get work: {response.status_code}"
