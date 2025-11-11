@@ -128,7 +128,8 @@ class DynamicContainerManager:
 
                 containers_to_cleanup.append(container)
 
-                agent_url = f"http://{container_name}:9000"
+                # Use localhost with host port since API server runs on host machine
+                agent_url = f"http://localhost:{host_port}"
 
                 agents.append({
                     "container_id": container.id,
