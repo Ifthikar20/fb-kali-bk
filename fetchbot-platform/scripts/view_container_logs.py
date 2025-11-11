@@ -105,33 +105,69 @@ class ContainerLogViewer:
         print(f"\n📋 Viewing logs from {len(containers)} container(s)...\n")
 
         if follow:
-            # Use subprocess to stream logs with color
-            procs = []
+            # Use Docker API for real-time streaming
+            import threading
+            import queue
+
+            log_queue = queue.Queue()
+            stop_event = threading.Event()
+
+            def stream_container_logs(container, q, stop):
+                """Stream logs from a container in a thread"""
+                try:
+                    name = container.name[-10:]  # Last 10 chars
+                    # Stream logs with timestamps
+                    for line in container.logs(stream=True, follow=True, tail=tail):
+                        if stop.is_set():
+                            break
+                        decoded = line.decode('utf-8').rstrip()
+                        q.put(f"[{name}] {decoded}")
+                except Exception as e:
+                    q.put(f"[{container.name[-10:]}] ERROR: {e}")
+
+            # Start threads for each container
+            threads = []
             for container in containers:
                 print(f"🔄 Following logs from: {container.name}")
-                proc = subprocess.Popen(
-                    ["docker", "logs", "-f", "--tail", str(tail), container.name],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
+                t = threading.Thread(
+                    target=stream_container_logs,
+                    args=(container, log_queue, stop_event),
+                    daemon=True
                 )
-                procs.append(proc)
+                t.start()
+                threads.append(t)
+
+            print("\n" + "="*80)
+            print("📺 Live logs (Ctrl+C to stop):")
+            print("="*80 + "\n")
 
             try:
-                # Stream logs from all processes
-                while procs:
-                    for proc in procs[:]:
-                        line = proc.stdout.readline()
-                        if line:
-                            # Get container name from process
-                            container_name = containers[procs.index(proc)].name
-                            print(f"[{container_name[-10:]}] {line.rstrip()}")
-                        elif proc.poll() is not None:
-                            procs.remove(proc)
+                while True:
+                    try:
+                        # Get logs from queue with timeout
+                        log_line = log_queue.get(timeout=0.1)
+                        print(log_line, flush=True)  # Force flush for real-time output
+                    except queue.Empty:
+                        # Check if containers still exist
+                        still_running = False
+                        for container in containers:
+                            try:
+                                container.reload()
+                                if container.status == 'running':
+                                    still_running = True
+                                    break
+                            except:
+                                pass
+                        if not still_running:
+                            print("\n⏹️  All containers have stopped")
+                            break
             except KeyboardInterrupt:
                 print("\n\n⏹️  Stopped following logs")
-                for proc in procs:
-                    proc.terminate()
+            finally:
+                stop_event.set()
+                # Wait a bit for threads to finish
+                for t in threads:
+                    t.join(timeout=1)
         else:
             # Show last N lines from each container
             for container in containers:
