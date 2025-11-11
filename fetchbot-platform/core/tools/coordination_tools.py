@@ -347,16 +347,37 @@ def create_vulnerability_report(
         f"by agent {agent_state.agent_id}"
     )
 
-    # Log finding discovery to database
+    # Log finding discovery to database with FULL details
     graph = get_agent_graph()
     agent_info = graph.get_agent_info(agent_state.agent_id)
     agent_name = agent_info.get("name", "Unknown") if agent_info else "Unknown"
+
+    # Create detailed log message with all evidence
+    detailed_log = f"""{title}
+
+**Severity:** {severity.upper()}
+**Type:** {vulnerability_type}
+**Affected URL:** {affected_url or 'N/A'}
+
+**Description:**
+{description}
+
+**Payload Used:**
+{payload or 'N/A'}
+
+**Evidence:**
+{evidence or 'No evidence provided'}
+
+**Remediation:**
+{remediation or 'N/A'}
+"""
 
     log_finding_discovered(
         job_id=agent_state.job_id,
         finding_title=title,
         severity=severity,
         agent_name=agent_name,
+        finding_details=detailed_log,  # Pass full details
         db_url=agent_state.db_url
     )
 

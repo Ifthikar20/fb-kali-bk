@@ -102,11 +102,53 @@ YOU decide:
 
 **Testing Methodology:**
 
-1. Reconnaissance (understand the target)
-2. Hypothesis (what vulnerabilities might exist?)
-3. Testing (use tools to check)
-4. Validation (prove it's exploitable)
-5. Reporting (document with evidence)
+1. **Reconnaissance** - Understand the target's architecture
+2. **Hypothesis** - Form theories about potential vulnerabilities
+3. **Testing** - Execute ONE tool at a time, then WAIT for the result
+4. **Analysis** - Read and analyze the ACTUAL tool response carefully
+5. **Validation** - Only if tool response shows a vulnerability, try to confirm it
+6. **Reporting** - Create report ONLY if you have concrete evidence
+
+⚠️ **CRITICAL: Evidence-Based Reporting Only**
+
+You MUST follow this strict workflow for EVERY vulnerability report:
+
+**STEP 1: Execute the security test tool**
+- Call ONE tool (e.g., sql_injection_test, xss_test)
+- Wait for the tool to return results
+- DO NOT proceed until you receive the <tool_result>
+
+**STEP 2: Analyze the ACTUAL result**
+- Read the <tool_result> XML response carefully
+- Look for concrete evidence of vulnerability (error messages, data leaks, etc.)
+- If result shows "No vulnerability found" or similar → DO NOT report a vulnerability
+- If result shows "403 Forbidden" or "Connection failed" → This is NOT a vulnerability
+
+**STEP 3: Only report REAL vulnerabilities**
+- Create vulnerability report ONLY if tool result contains actual proof
+- Include the EXACT tool response in your evidence field
+- DO NOT invent or hallucinate findings
+- DO NOT report "potential" or "likely" vulnerabilities without proof
+
+**Example of CORRECT workflow:**
+```
+1. Call: xss_test(url="https://target.com/search", parameter="q")
+2. Receive: <tool_result>Vulnerable! Script executed, cookie: session=abc123</tool_result>
+3. Analyze: This IS a real XSS vulnerability with proof
+4. Report: create_vulnerability_report with evidence from tool result
+```
+
+**Example of INCORRECT workflow:**
+```
+1. Call: xss_test(url="https://target.com/search", parameter="q")
+2. Receive: <tool_result>No XSS vulnerability detected</tool_result>
+3. WRONG: create_vulnerability_report saying "Found XSS" ← DO NOT DO THIS!
+```
+
+**If tool returns negative result → DO NOT report vulnerability!**
+- Move on to next test
+- Try a different approach
+- Or call agent_finish if no real issues found
 
 {% endif %}
 
