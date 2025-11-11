@@ -58,22 +58,64 @@ def create_agent(
     # Create LLM config for new agent
     llm_config = LLMConfig(prompt_modules=module_list)
 
+    # Get next sandbox URL using round-robin distribution
+    sandbox_urls = getattr(agent_state, 'sandbox_urls', [agent_state.sandbox_url])
+    agent_graph = get_agent_graph()
+    num_agents = len(agent_graph.get_all_agents())
+    selected_sandbox_url = sandbox_urls[num_agents % len(sandbox_urls)]
+
     # Create agent configuration (inherit target from parent)
     agent_config = {
         "llm_config": llm_config,
         "max_iterations": 50,
-        "sandbox_url": agent_state.sandbox_url,
+        "sandbox_url": selected_sandbox_url,
+        "sandbox_urls": sandbox_urls,  # Pass all URLs to children
         "db_url": agent_state.db_url,
         "job_id": agent_state.job_id,
         "target": agent_state.target  # Propagate target to child agents
     }
+
+    # Enhance task with explicit target URL to prevent LLM from hallucinating example.com
+    # Extract domain from target for clarity
+    import re
+    target_url = agent_state.target
+    domain_match = re.search(r'https?://([^/]+)', target_url)
+    domain = domain_match.group(1) if domain_match else target_url
+
+    enhanced_task = f"""🎯 TARGET: {target_url}
+🎯 DOMAIN: {domain}
+
+{task}
+
+⚠️ CRITICAL INSTRUCTIONS - READ CAREFULLY:
+
+1. The ONLY URL you are authorized to test is: {target_url}
+2. When calling ANY security testing tool, you MUST use: {target_url}
+3. DO NOT use example.com, test.com, or any fictional URLs
+4. DO NOT make up endpoints - use the real target: {target_url}
+5. If testing specific paths, use: {target_url}/path (never example.com/path)
+6. For domain-based tools (like nmap), use: {domain}
+
+EXAMPLES OF CORRECT USAGE:
+✅ http_scan(url="{target_url}")
+✅ sql_injection_test(url="{target_url}/api/users")
+✅ xss_test(url="{target_url}/search")
+✅ nmap_scan(target="{domain}")
+
+EXAMPLES OF INCORRECT USAGE (DO NOT DO THIS):
+❌ http_scan(url="https://example.com")
+❌ sql_injection_test(url="https://example.com/api/users")
+❌ xss_test(url="https://test.com/search")
+
+Your target is: {target_url}
+Test ONLY this target. Begin your security testing NOW."""
 
     # Create new agent
     new_agent = BaseAgent(
         config=agent_config,
         parent_id=agent_state.agent_id,
         name=name,
-        task=task
+        task=enhanced_task
     )
 
     logger.info(
@@ -107,8 +149,8 @@ def create_agent(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # Run agent
-            result = loop.run_until_complete(new_agent.run(task))
+            # Run agent with enhanced task
+            result = loop.run_until_complete(new_agent.run(enhanced_task))
 
             # Send completion message to parent
             graph = get_agent_graph()
@@ -305,18 +347,68 @@ def create_vulnerability_report(
         f"by agent {agent_state.agent_id}"
     )
 
-    # Log finding discovery to database
+    # Log finding discovery to database with FULL details
     graph = get_agent_graph()
     agent_info = graph.get_agent_info(agent_state.agent_id)
     agent_name = agent_info.get("name", "Unknown") if agent_info else "Unknown"
+
+    # Create detailed log message with all evidence
+    detailed_log = f"""{title}
+
+**Severity:** {severity.upper()}
+**Type:** {vulnerability_type}
+**Affected URL:** {affected_url or 'N/A'}
+
+**Description:**
+{description}
+
+**Payload Used:**
+{payload or 'N/A'}
+
+**Evidence:**
+{evidence or 'No evidence provided'}
+
+**Remediation:**
+{remediation or 'N/A'}
+"""
 
     log_finding_discovered(
         job_id=agent_state.job_id,
         finding_title=title,
         severity=severity,
         agent_name=agent_name,
+        finding_details=detailed_log,  # Pass full details
         db_url=agent_state.db_url
     )
+
+    # REAL-TIME DATABASE SAVE: Save finding to database immediately for UI display
+    if agent_state.db_url:
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import Finding
+
+            engine = create_engine(agent_state.db_url)
+            SessionLocal = sessionmaker(bind=engine)
+            db = SessionLocal()
+
+            finding_record = Finding(
+                pentest_job_id=agent_state.job_id,
+                title=title,
+                description=description,
+                severity=severity.upper(),
+                vulnerability_type=vulnerability_type.upper(),
+                url=affected_url or "",
+                payload=payload or "",
+                discovered_by=agent_name
+            )
+            db.add(finding_record)
+            db.commit()
+            db.close()
+
+            logger.info(f"✅ Saved finding to database: {title}")
+        except Exception as e:
+            logger.error(f"Failed to save finding to database: {e}")
 
     return {
         "status": "created",
@@ -353,21 +445,80 @@ def get_scan_status(agent_state) -> Dict[str, Any]:
 def finish_scan(
     agent_state,
     summary: str,
-    total_findings: int = 0
+    total_findings: int = 0,
+    all_agents_confirmed_complete: bool = False
 ) -> Dict[str, Any]:
     """
-    Mark the entire security scan as complete (used by root coordinator)
+    Mark the entire security scan as complete (root agent only)
+
+    ⚠️ CRITICAL REQUIREMENTS - Scan will FAIL if not met:
+    1. ALL child agents MUST be status="completed"
+    2. You MUST have received completion messages from ALL agents
+    3. You MUST have analyzed all fuzzing results via Claude/MCP
+    4. Findings MUST be confirmed as real vulnerabilities (not assumptions)
+    5. Set all_agents_confirmed_complete=True to acknowledge above
+
+    Calling this prematurely will:
+    - Shut down Docker containers while agents are running
+    - Lose in-progress scan data
+    - Create incomplete reports
 
     Args:
         summary: Executive summary of the assessment
         total_findings: Total number of findings across all agents
+        all_agents_confirmed_complete: REQUIRED confirmation that ALL agents finished
 
     Returns:
-        Completion status
+        Completion status or error if agents still running
     """
-    # Aggregate all findings from all agents
+    # SAFETY CHECK: Verify all agents are actually complete
     graph = get_agent_graph()
     all_agents = graph.get_all_agents()
+
+    # Check for running or pending agents
+    incomplete_agents = [
+        (agent_id, info)
+        for agent_id, info in all_agents.items()
+        if agent_id != agent_state.agent_id and info["status"] in ["running", "pending"]
+    ]
+
+    if incomplete_agents:
+        incomplete_list = "\n".join([
+            f"  - {agent_id}: {info['name']} (status: {info['status']})"
+            for agent_id, info in incomplete_agents
+        ])
+
+        error_msg = f"""
+❌ CANNOT FINISH SCAN - Agents still running!
+
+The following agents have not completed:
+{incomplete_list}
+
+You MUST:
+1. Wait for these agents to finish their work
+2. Use get_my_agents to check their status
+3. Only call finish_scan when ALL agents show status="completed"
+
+⚠️ If you proceed now, containers will shut down and lose their work!
+        """
+
+        logger.error(error_msg)
+        return {
+            "status": "error",
+            "error": "Cannot finish scan - agents still running",
+            "incomplete_agents": [agent_id for agent_id, _ in incomplete_agents],
+            "message": error_msg
+        }
+
+    if not all_agents_confirmed_complete:
+        return {
+            "status": "error",
+            "error": "Missing confirmation",
+            "message": "You must set all_agents_confirmed_complete=True to confirm all agents have finished"
+        }
+
+    # All checks passed - proceed with scan completion
+    logger.info("✅ All agents confirmed complete - finishing scan")
 
     # Count findings by severity
     all_findings = agent_state.get_findings()

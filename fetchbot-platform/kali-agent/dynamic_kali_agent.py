@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FetchBot Dynamic Kali Agent", version="3.0.0")
 
-# Get agent ID from environment
+# Get agent configuration from environment
 AGENT_ID = os.environ.get('AGENT_ID', 'kali-agent-unknown')
+TARGET_URL = os.environ.get('TARGET_URL', '')  # Default target for this agent
+JOB_ID = os.environ.get('JOB_ID', '')
 
 class ToolRequest(BaseModel):
     """Request to execute a specific tool"""
@@ -426,6 +428,491 @@ class DynamicKaliAgent:
 
         return results
 
+    async def ffuf_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Directory/file fuzzing with ffuf (Fast web fuzzer)
+
+        Uses SecLists wordlists for discovering hidden files and directories
+        """
+        url = params.get('url', '')
+        wordlist = params.get('wordlist', '/usr/share/wordlists/common.txt')
+        extensions = params.get('extensions', '')  # e.g., "php,html,txt"
+        threads = params.get('threads', '40')
+
+        results = {"url": url, "wordlist": wordlist, "found": []}
+
+        try:
+            # Build ffuf command
+            # FUZZ keyword is where wordlist items get inserted
+            fuzz_url = url.rstrip('/') + '/FUZZ'
+
+            cmd = [
+                'ffuf',
+                '-u', fuzz_url,
+                '-w', wordlist,
+                '-t', str(threads),
+                '-mc', '200,204,301,302,307,401,403',  # Match these status codes
+                '-fc', '404',  # Filter out 404s
+                '-timeout', '10',
+                '-maxtime', '60',  # Max 60 seconds
+                '-o', '/tmp/ffuf_output.json',
+                '-of', 'json',
+                '-s'  # Silent mode (less output)
+            ]
+
+            if extensions:
+                cmd.extend(['-e', extensions])
+
+            # Run ffuf
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=70  # 10 seconds more than ffuf's maxtime
+            )
+
+            # Parse JSON output
+            try:
+                import json
+                with open('/tmp/ffuf_output.json', 'r') as f:
+                    ffuf_data = json.load(f)
+
+                if 'results' in ffuf_data:
+                    for result in ffuf_data['results'][:50]:  # Limit to 50 results
+                        results["found"].append({
+                            'url': result.get('url', ''),
+                            'status': result.get('status', 0),
+                            'size': result.get('length', 0),
+                            'words': result.get('words', 0),
+                            'lines': result.get('lines', 0)
+                        })
+            except:
+                pass
+
+            results["discovered_count"] = len(results["found"])
+            results["note"] = f"Fuzzing completed. Found {len(results['found'])} interesting paths."
+
+        except asyncio.TimeoutError:
+            results["error"] = "Fuzzing timed out after 60 seconds"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def gobuster_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Directory brute-forcing with gobuster
+
+        Faster than dirb, uses SecLists wordlists
+        """
+        url = params.get('url', '')
+        wordlist = params.get('wordlist', '/usr/share/wordlists/common.txt')
+        extensions = params.get('extensions', '')  # e.g., "php,html"
+        threads = params.get('threads', '50')
+
+        results = {"url": url, "wordlist": wordlist, "found": []}
+
+        try:
+            cmd = [
+                'gobuster', 'dir',
+                '-u', url,
+                '-w', wordlist,
+                '-t', str(threads),
+                '-q',  # Quiet mode
+                '-n',  # No status
+                '--no-error',
+                '--timeout', '10s',
+                '-o', '/tmp/gobuster_output.txt'
+            ]
+
+            if extensions:
+                cmd.extend(['-x', extensions])
+
+            # Run gobuster
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=120  # 2 minutes max
+            )
+
+            # Parse output file
+            try:
+                with open('/tmp/gobuster_output.txt', 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            # Gobuster format: /path (Status: 200) [Size: 1234]
+                            parts = line.strip().split()
+                            if len(parts) >= 3:
+                                results["found"].append({
+                                    'path': parts[0],
+                                    'status': parts[2].rstrip(')') if len(parts) > 2 else 'unknown',
+                                    'line': line.strip()
+                                })
+            except:
+                pass
+
+            results["discovered_count"] = len(results["found"])
+            results["note"] = f"Directory brute-force completed. Found {len(results['found'])} paths."
+
+        except asyncio.TimeoutError:
+            results["error"] = "Gobuster timed out after 2 minutes"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def nmap_detailed_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Detailed nmap scan with service detection and OS fingerprinting
+
+        Shows full nmap output for transparency
+        """
+        target = params.get('target', '')
+
+        results = {"target": target, "raw_output": "", "parsed": {}}
+
+        try:
+            # Extract hostname/IP
+            host = target.replace('https://', '').replace('http://', '').split('/')[0]
+            ip = socket.gethostbyname(host)
+
+            # Run detailed nmap with aggressive options
+            cmd = [
+                'nmap',
+                '-sV',  # Service version detection
+                '-A',   # OS detection, version detection, script scanning
+                '-T4',  # Aggressive timing
+                '--top-ports', '1000',
+                '--open',  # Only show open ports
+                ip
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=180  # 3 minutes for detailed scan
+            )
+
+            raw_output = stdout.decode('utf-8', errors='ignore')
+            results["raw_output"] = raw_output
+            results["ip"] = ip
+
+            # Also use python-nmap for structured data
+            self.nm.scan(ip, arguments='-sV -T4 --top-ports 100')
+
+            open_ports = []
+            for host in self.nm.all_hosts():
+                for proto in self.nm[host].all_protocols():
+                    ports = self.nm[host][proto].keys()
+                    for port in ports:
+                        port_info = self.nm[host][proto][port]
+                        if port_info['state'] == 'open':
+                            open_ports.append({
+                                'port': port,
+                                'protocol': proto,
+                                'service': port_info.get('name', 'unknown'),
+                                'version': port_info.get('version', ''),
+                                'product': port_info.get('product', ''),
+                                'extrainfo': port_info.get('extrainfo', ''),
+                                'state': 'open'
+                            })
+
+            results["parsed"]["open_ports"] = open_ports
+            results["parsed"]["os_detection"] = self.nm[ip].get('osmatch', []) if ip in self.nm.all_hosts() else []
+
+        except asyncio.TimeoutError:
+            results["error"] = "Nmap scan timed out after 3 minutes"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def recursive_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Professional recursive web fuzzing - keeps digging until findings are complete
+
+        Returns results to Claude for analysis instead of auto-reporting vulnerabilities
+        """
+        url = params.get('url', '')
+        max_depth = params.get('max_depth', 3)
+        wordlist_name = params.get('wordlist', 'common')
+        extensions = params.get('extensions', '')
+        follow_redirects = params.get('follow_redirects', True)
+
+        results = {
+            "tool": "recursive_fuzz",
+            "url": url,
+            "max_depth": max_depth,
+            "discovered_paths": [],
+            "interesting_findings": [],
+            "depth_map": {},
+            "total_requests": 0,
+            "analysis_needed": True  # Claude must analyze
+        }
+
+        try:
+            # Map wordlist names to files
+            wordlist_map = {
+                "common": "/usr/share/wordlists/common.txt",
+                "medium": "/usr/share/wordlists/big.txt",
+                "large": "/usr/share/wordlists/dirlist.txt"
+            }
+            wordlist_path = wordlist_map.get(wordlist_name, "/usr/share/wordlists/common.txt")
+
+            # Prepare base domain
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+            async def fuzz_path(path: str, current_depth: int):
+                """Recursively fuzz a path"""
+                if current_depth > max_depth:
+                    return
+
+                fuzz_url = f"{base_url}{path}/FUZZ"
+                if path == "":
+                    fuzz_url = f"{base_url}/FUZZ"
+
+                # Build ffuf command
+                cmd = [
+                    'ffuf',
+                    '-u', fuzz_url,
+                    '-w', wordlist_path,
+                    '-t', '20',  # 20 threads for speed
+                    '-mc', '200,201,202,204,301,302,307,401,403',
+                    '-fc', '404',  # Filter 404s
+                    '-o', '/tmp/ffuf_recursive.json',
+                    '-of', 'json',
+                    '-maxtime', '120',  # 2 min max per path
+                    '-s'  # Silent mode
+                ]
+
+                # Add extensions if provided
+                if extensions:
+                    cmd.extend(['-e', extensions])
+
+                # Run ffuf
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+
+                await proc.wait()
+
+                # Parse results
+                try:
+                    import json
+                    with open('/tmp/ffuf_recursive.json', 'r') as f:
+                        ffuf_data = json.load(f)
+
+                    for result in ffuf_data.get('results', []):
+                        found_url = result['url']
+                        status = result['status']
+                        size = result['length']
+
+                        discovered_path = {
+                            "url": found_url,
+                            "status": status,
+                            "size": size,
+                            "depth": current_depth
+                        }
+
+                        results["discovered_paths"].append(discovered_path)
+                        results["total_requests"] += 1
+
+                        # Track depth
+                        results["depth_map"][found_url] = current_depth
+
+                        # Identify interesting responses
+                        if status in [200, 403, 401]:
+                            results["interesting_findings"].append({
+                                "url": found_url,
+                                "status": status,
+                                "reason": self._analyze_response_interest(status, found_url)
+                            })
+
+                        # Recurse into directories (200, 301, 403)
+                        if status in [200, 301, 302, 403] and current_depth < max_depth:
+                            # Extract path from URL
+                            new_path = found_url.replace(base_url, '')
+                            await fuzz_path(new_path, current_depth + 1)
+
+                except FileNotFoundError:
+                    pass  # No results file means no findings
+
+            # Start recursive fuzzing from root
+            await fuzz_path("", 1)
+
+            # Add summary for Claude
+            results["summary"] = {
+                "total_paths": len(results["discovered_paths"]),
+                "interesting_count": len(results["interesting_findings"]),
+                "max_depth_reached": max(results["depth_map"].values()) if results["depth_map"] else 0,
+                "needs_manual_review": len(results["interesting_findings"]) > 0
+            }
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    def _analyze_response_interest(self, status: int, url: str) -> str:
+        """Analyze why a response is interesting"""
+        reasons = []
+
+        if status == 403:
+            reasons.append("Forbidden - potential hidden admin/config area")
+        if status == 401:
+            reasons.append("Unauthorized - authentication required")
+        if status == 200:
+            if any(word in url.lower() for word in ['admin', 'config', 'backup', '.env', '.sql', '.bak']):
+                reasons.append("Sensitive filename pattern detected")
+
+        return "; ".join(reasons) if reasons else "Successful response"
+
+    async def adaptive_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Adaptive fuzzing that adjusts based on findings"""
+        url = params.get('url', '')
+        initial_wordlist = params.get('initial_wordlist', 'common')
+        enable_smart_extensions = params.get('enable_smart_extensions', True)
+        stop_on_waf = params.get('stop_on_waf', True)
+
+        results = {
+            "tool": "adaptive_fuzz",
+            "url": url,
+            "discovered_content": [],
+            "technology_detected": [],
+            "waf_detected": False,
+            "forbidden_paths": [],
+            "backup_files": [],
+            "claude_analysis_request": True
+        }
+
+        try:
+            # First, detect technology
+            import httpx
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                resp = await client.get(url)
+
+                # Detect tech stack from headers and content
+                server_header = resp.headers.get('server', '').lower()
+                x_powered_by = resp.headers.get('x-powered-by', '').lower()
+
+                if 'php' in server_header or 'php' in x_powered_by or '.php' in resp.text[:1000]:
+                    results["technology_detected"].append("PHP")
+                if 'asp.net' in x_powered_by or 'iis' in server_header:
+                    results["technology_detected"].append("ASP.NET")
+                if 'nginx' in server_header:
+                    results["technology_detected"].append("Nginx")
+                if 'apache' in server_header:
+                    results["technology_detected"].append("Apache")
+
+            # Use recursive_fuzz with smart extensions
+            smart_extensions = ""
+            if enable_smart_extensions and "PHP" in results["technology_detected"]:
+                smart_extensions = "php,php3,php4,php5,phtml,inc"
+            elif enable_smart_extensions and "ASP.NET" in results["technology_detected"]:
+                smart_extensions = "asp,aspx,asmx,ashx,config"
+
+            # Call recursive fuzzing
+            fuzz_results = await self.recursive_fuzz({
+                "url": url,
+                "max_depth": 2,
+                "wordlist": initial_wordlist,
+                "extensions": smart_extensions,
+                "follow_redirects": True
+            })
+
+            # Categorize results
+            for finding in fuzz_results.get("discovered_paths", []):
+                url_path = finding["url"]
+                status = finding["status"]
+
+                if status == 403:
+                    results["forbidden_paths"].append(url_path)
+
+                if any(ext in url_path.lower() for ext in ['.bak', '.sql', '.tar.gz', '.zip', '.old', '~']):
+                    results["backup_files"].append(url_path)
+
+            results["discovered_content"] = fuzz_results.get("discovered_paths", [])
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def targeted_fuzz(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Targeted fuzzing for specific vulnerability types"""
+        url = params.get('url', '')
+        fuzz_type = params.get('fuzz_type', 'backup_files')
+        custom_payloads = params.get('custom_payloads', [])
+
+        # Predefined payloads for each type
+        payload_map = {
+            "backup_files": ['.bak', '.sql', '.tar.gz', '.zip', '.old', '~', '.swp', '.save'],
+            "config_files": ['.env', 'config.php', 'web.config', 'application.properties', 'settings.py'],
+            "admin_panels": ['admin', 'administrator', 'wp-admin', 'cpanel', 'phpmyadmin', 'admin.php'],
+            "api_endpoints": ['/api', '/v1', '/v2', '/graphql', '/rest', '/swagger', '/openapi.json'],
+            "debug_endpoints": ['/debug', '/test', '/_profiler', '/actuator', '/.well-known'],
+            "source_disclosure": ['.git', '.svn', '.DS_Store', '.htaccess', 'web.config', '.npmrc']
+        }
+
+        payloads = custom_payloads if custom_payloads else payload_map.get(fuzz_type, [])
+
+        results = {
+            "tool": "targeted_fuzz",
+            "url": url,
+            "fuzz_type": fuzz_type,
+            "findings": [],
+            "security_impact": {},
+            "claude_confirmation_needed": True
+        }
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                for payload in payloads:
+                    test_url = f"{url.rstrip('/')}/{payload.lstrip('/')}"
+
+                    try:
+                        resp = await client.get(test_url)
+                        if resp.status_code in [200, 403, 401]:
+                            results["findings"].append({
+                                "url": test_url,
+                                "status": resp.status_code,
+                                "payload": payload,
+                                "size": len(resp.content)
+                            })
+
+                            # Estimate security impact
+                            if resp.status_code == 200:
+                                results["security_impact"][test_url] = "HIGH - Publicly accessible"
+                            elif resp.status_code == 403:
+                                results["security_impact"][test_url] = "MEDIUM - Exists but access denied"
+
+                    except Exception:
+                        continue
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
 
 # Create agent instance
 agent = DynamicKaliAgent(AGENT_ID)
@@ -437,12 +924,24 @@ async def execute_tool(request: ToolRequest):
     return await agent.execute_tool(request.tool_name, request.parameters)
 
 
+@app.on_event("startup")
+async def startup_event():
+    """Log agent configuration on startup"""
+    logger.info(f"=== Dynamic Kali Agent Started ===")
+    logger.info(f"Agent ID: {AGENT_ID}")
+    logger.info(f"Target URL: {TARGET_URL if TARGET_URL else '(not set - will be provided via API)'}")
+    logger.info(f"Job ID: {JOB_ID if JOB_ID else '(not set)'}")
+    logger.info(f"================================")
+
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
         "agent_type": "dynamic-kali-agent",
         "agent_id": AGENT_ID,
+        "target_url": TARGET_URL if TARGET_URL else None,
+        "job_id": JOB_ID if JOB_ID else None,
         "version": "3.0.0"
     }
 
@@ -452,13 +951,17 @@ async def get_status():
     """Get agent status"""
     return {
         "agent_id": AGENT_ID,
+        "target_url": TARGET_URL if TARGET_URL else None,
+        "job_id": JOB_ID if JOB_ID else None,
         "status": "ready",
         "mode": "dynamic",
         "available_tools": [
-            "nmap_scan", "http_scan", "dns_enumerate", "resolve_domain",
+            "nmap_scan", "nmap_detailed_scan", "http_scan", "dns_enumerate", "resolve_domain",
             "javascript_analysis", "security_headers_check", "sql_injection_test",
             "xss_test", "api_fuzzing", "api_brute_force", "api_idor_test",
-            "api_rate_limit_test", "api_privilege_escalation_test", "detect_exposed_env_vars"
+            "api_rate_limit_test", "api_privilege_escalation_test", "detect_exposed_env_vars",
+            "ffuf_scan", "gobuster_scan",
+            "recursive_fuzz", "adaptive_fuzz", "targeted_fuzz"
         ]
     }
 

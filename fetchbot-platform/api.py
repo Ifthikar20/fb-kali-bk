@@ -21,17 +21,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load settings from .env file FIRST
+settings = get_settings()
+
 # Detect which orchestrator to use based on environment
-USE_DYNAMIC_AGENTS = os.environ.get('USE_DYNAMIC_AGENTS', 'false').lower() == 'true'
-USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
+USE_DYNAMIC_AGENTS = settings.use_dynamic_agents
+NUM_KALI_AGENTS = settings.num_kali_agents
 
 if USE_DYNAMIC_AGENTS:
     from core.orchestrator import DynamicOrchestrator as OrchestratorClass
     NUM_AGENTS = 0
     print("[INIT] ✨ Using DYNAMIC MULTI-AGENT orchestrator (AI-driven agent creation)")
-elif USE_MULTI_KALI:
+elif NUM_KALI_AGENTS:
     from multi_kali_orchestrator import MultiKaliOrchestrator as OrchestratorClass
-    NUM_AGENTS = int(USE_MULTI_KALI)
+    NUM_AGENTS = NUM_KALI_AGENTS
     print(f"[INIT] Using Multi-Kali orchestrator with {NUM_AGENTS} agents")
 else:
     from bot_orchestrator import BotOrchestrator as OrchestratorClass

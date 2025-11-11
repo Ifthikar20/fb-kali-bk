@@ -36,7 +36,13 @@ class RootAgent(BaseAgent):
     3. Network agent finds open ports → Creates service-specific agents
     """
 
-    def __init__(self, target: str, job_id: str, db_url: str = None):
+    def __init__(
+        self,
+        target: str,
+        job_id: str,
+        db_url: str = None,
+        sandbox_urls: list = None
+    ):
         """
         Initialize root coordinator agent
 
@@ -44,14 +50,20 @@ class RootAgent(BaseAgent):
             target: Target URL, domain, or IP to assess
             job_id: Unique job identifier for this assessment
             db_url: Database URL for execution logging (optional)
+            sandbox_urls: List of Kali agent sandbox URLs for load distribution (optional)
         """
         # Root agent has NO prompt modules (empty list)
         llm_config = LLMConfig(prompt_modules=[])
 
+        # Use first sandbox URL as default, or fallback
+        if not sandbox_urls:
+            sandbox_urls = ["http://kali-agent-1:9000"]
+
         config = {
             "llm_config": llm_config,
             "max_iterations": 100,  # Root agent can run longer
-            "sandbox_url": "http://kali-agent-1:9000",
+            "sandbox_url": sandbox_urls[0],  # Use first URL for root
+            "sandbox_urls": sandbox_urls,  # Store all URLs for distribution
             "db_url": db_url,
             "job_id": job_id,
             "target": target  # Target URL/domain
@@ -68,8 +80,13 @@ class RootAgent(BaseAgent):
         self.target = target
         self.job_id = job_id
         self.db_url = db_url
+        self.sandbox_urls = sandbox_urls
+        self._sandbox_url_index = 0  # For round-robin distribution
 
-        logger.info(f"Root coordinator initialized for target: {target}")
+        logger.info(
+            f"Root coordinator initialized for target: {target} "
+            f"with {len(sandbox_urls)} sandbox agents"
+        )
 
     async def run_assessment(self) -> Dict[str, Any]:
         """
@@ -182,6 +199,12 @@ STRATEGY:
    - Use get_scan_status to see overall progress
    - Read messages from agents (they'll notify you when done)
 
+   ⚠️ CRITICAL: You MUST wait for ALL child agents to complete before proceeding!
+   - Each agent will send you a completion message when done
+   - Keep checking get_my_agents until all agents show status="completed"
+   - DO NOT call finish_scan until you've received completion messages from ALL agents
+   - If you call finish_scan too early, the containers will be shut down mid-scan!
+
 4. MAKE STRATEGIC DECISIONS
    - Don't create duplicate agents
    - Prioritize high-impact tests
@@ -189,9 +212,12 @@ STRATEGY:
    - Create follow-up agents based on discoveries
 
 5. AGGREGATE AND FINISH
-   - Once all agents complete, review findings
+   - ⚠️ ONLY after ALL child agents have completed (check get_my_agents)
+   - Review all findings from completed agents
    - Use finish_scan to mark assessment complete
    - Provide summary of what was tested
+
+   REMINDER: finish_scan triggers container cleanup! Only call it when 100% done.
 
 IMPORTANT RULES:
 - Do NOT use scanning tools yourself - create agents for that
