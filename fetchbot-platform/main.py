@@ -1,6 +1,14 @@
 """FetchBot.ai - Main Entry Point"""
 import uvicorn
+import logging
 from api import app
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     print("""
@@ -12,8 +20,6 @@ if __name__ == "__main__":
     ║    Each organization gets dedicated AWS EC2 + IP         ║
     ║                                                          ║
     ╚══════════════════════════════════════════════════════════╝
-    
-    Starting API server...
     """)
     
     uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")

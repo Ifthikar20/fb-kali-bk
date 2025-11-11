@@ -1,10 +1,10 @@
 """FetchBot.ai REST API"""
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
 import asyncio
@@ -58,6 +58,51 @@ app.add_middleware(
 )
 
 security = HTTPBearer()
+
+# WebSocket connection manager for real-time event streaming
+class ConnectionManager:
+    """Manages WebSocket connections for real-time scan event streaming"""
+
+    def __init__(self):
+        # Dict[job_id, List[WebSocket]]
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, job_id: str):
+        """Accept WebSocket connection"""
+        await websocket.accept()
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = []
+        self.active_connections[job_id].append(websocket)
+        logger.info(f"[WEBSOCKET] Client connected for job {job_id}")
+
+    def disconnect(self, websocket: WebSocket, job_id: str):
+        """Remove WebSocket connection"""
+        if job_id in self.active_connections:
+            if websocket in self.active_connections[job_id]:
+                self.active_connections[job_id].remove(websocket)
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+        logger.info(f"[WEBSOCKET] Client disconnected from job {job_id}")
+
+    async def send_event(self, job_id: str, event: str, data: dict):
+        """Send event to all clients watching a job"""
+        if job_id not in self.active_connections:
+            return
+
+        message = {"event": event, "data": data}
+        disconnected = []
+
+        for connection in self.active_connections[job_id]:
+            try:
+                await connection.send_json(message)
+            except:
+                disconnected.append(connection)
+
+        for connection in disconnected:
+            self.disconnect(connection, job_id)
+
+# Global WebSocket manager
+ws_manager = ConnectionManager()
 
 # Lazy-load AWS manager only when needed (for EC2 deployments)
 _aws_manager = None
@@ -407,11 +452,17 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
             finding = Finding(
                 pentest_job_id=job_id,
                 title=finding_data.get('title', 'Unknown'),
+                description=finding_data.get('description', ''),
                 severity=finding_data.get('severity', 'info'),
                 vulnerability_type=finding_data.get('type', 'unknown'),
                 url=finding_data.get('url'),
                 payload=finding_data.get('payload'),
-                discovered_by=finding_data.get('discovered_by', 'unknown')
+                discovered_by=finding_data.get('discovered_by', 'unknown'),
+                evidence=finding_data.get('evidence', {}),
+                remediation=finding_data.get('remediation', {}),
+                cvss_score=finding_data.get('cvss_score'),
+                cwe=finding_data.get('cwe'),
+                owasp_category=finding_data.get('owasp_category')
             )
             db.add(finding)
         
@@ -448,13 +499,27 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
         job.started_at = datetime.utcnow()
         db.commit()
 
+        # Send status update
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"🚀 Starting scan for {target}",
+            "level": "INFO"
+        })
+        await ws_manager.send_event(job_id, "status", {"status": "running"})
+
         # Create dynamic orchestrator
         orchestrator = OrchestratorClass(org_elastic_ip)
+
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": "🤖 Initializing AI orchestrator...",
+            "level": "INFO"
+        })
 
         # Run dynamic scan
         results = await orchestrator.run_scan(target, job_id, db_url=db_url)
 
-        # Store findings
+        # Store findings and broadcast each one
         for finding_data in results.get('findings', []):
             finding = Finding(
                 pentest_job_id=job_id,
@@ -464,9 +529,22 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
                 vulnerability_type=finding_data.get('type', 'unknown'),
                 url=finding_data.get('affected_url') or finding_data.get('url'),
                 payload=finding_data.get('payload'),
-                discovered_by=finding_data.get('discovered_by', 'Dynamic Agent')
+                discovered_by=finding_data.get('discovered_by', 'Dynamic Agent'),
+                evidence=finding_data.get('evidence', {}),
+                remediation=finding_data.get('remediation', {}),
+                cvss_score=finding_data.get('cvss_score'),
+                cwe=finding_data.get('cwe'),
+                owasp_category=finding_data.get('owasp_category')
             )
             db.add(finding)
+
+            # Broadcast finding
+            await ws_manager.send_event(job_id, "finding", {
+                "title": finding_data.get('title', 'Unknown'),
+                "severity": finding_data.get('severity', 'info'),
+                "type": finding_data.get('type', 'unknown'),
+                "url": finding_data.get('affected_url') or finding_data.get('url')
+            })
 
         job.status = JobStatus.COMPLETED if results.get('status') == 'completed' else JobStatus.FAILED
         job.completed_at = datetime.utcnow()
@@ -476,12 +554,36 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
 
         db.commit()
 
+        # Send completion event
+        await ws_manager.send_event(job_id, "completed", {
+            "status": job.status.value,
+            "total_findings": job.total_findings or 0,
+            "critical": job.critical_count or 0,
+            "high": job.high_count or 0
+        })
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"✅ Scan completed! Found {job.total_findings} vulnerabilities",
+            "level": "SUCCESS"
+        })
+
     except Exception as e:
         print(f"[DYNAMIC SCAN] Failed: {e}")
         import traceback
         traceback.print_exc()
         job.status = JobStatus.FAILED
         db.commit()
+
+        # Send error event
+        await ws_manager.send_event(job_id, "error", {
+            "status": "failed",
+            "error": str(e)
+        })
+        await ws_manager.send_event(job_id, "log", {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": f"❌ Scan failed: {str(e)}",
+            "level": "ERROR"
+        })
     finally:
         db.close()
 
@@ -574,10 +676,18 @@ async def get_job_findings(
             {
                 'id': f.id,
                 'title': f.title,
+                'description': f.description,
                 'severity': f.severity.value,
                 'vulnerability_type': f.vulnerability_type,
                 'url': f.url,
-                'discovered_by': f.discovered_by
+                'payload': f.payload,
+                'discovered_by': f.discovered_by,
+                'evidence': f.evidence if hasattr(f, 'evidence') and f.evidence else {},
+                'remediation': f.remediation if hasattr(f, 'remediation') and f.remediation else {},
+                'cvss_score': f.cvss_score if hasattr(f, 'cvss_score') else None,
+                'cwe': f.cwe if hasattr(f, 'cwe') else None,
+                'owasp_category': f.owasp_category if hasattr(f, 'owasp_category') else None,
+                'discovered_at': f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None
             }
             for f in findings
         ]
@@ -710,9 +820,10 @@ async def get_scan_status(
     # Get findings
     findings = db.query(Finding).filter(Finding.pentest_job_id == job_id).all()
 
-    # Format findings
+    # Format findings with detailed evidence
     formatted_findings = [
         {
+            "id": f.id,
             "title": f.title,
             "severity": f.severity.value.lower(),  # Frontend expects lowercase
             "type": f.vulnerability_type,
