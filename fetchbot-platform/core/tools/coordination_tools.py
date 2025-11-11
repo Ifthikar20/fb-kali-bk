@@ -381,6 +381,35 @@ def create_vulnerability_report(
         db_url=agent_state.db_url
     )
 
+    # REAL-TIME DATABASE SAVE: Save finding to database immediately for UI display
+    if agent_state.db_url:
+        try:
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            from models import Finding
+
+            engine = create_engine(agent_state.db_url)
+            SessionLocal = sessionmaker(bind=engine)
+            db = SessionLocal()
+
+            finding_record = Finding(
+                pentest_job_id=agent_state.job_id,
+                title=title,
+                description=description,
+                severity=severity.upper(),
+                vulnerability_type=vulnerability_type.upper(),
+                url=affected_url or "",
+                payload=payload or "",
+                discovered_by=agent_name
+            )
+            db.add(finding_record)
+            db.commit()
+            db.close()
+
+            logger.info(f"✅ Saved finding to database: {title}")
+        except Exception as e:
+            logger.error(f"Failed to save finding to database: {e}")
+
     return {
         "status": "created",
         "finding_id": len(agent_state.get_findings()),
