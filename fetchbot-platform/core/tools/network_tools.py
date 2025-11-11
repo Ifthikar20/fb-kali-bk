@@ -111,3 +111,33 @@ def resolve_domain(domain: str) -> Dict[str, Any]:
             "error": str(e),
             "status": "failed"
         }
+
+
+@register_tool(sandbox_execution=True, description="Comprehensive nmap scan with service detection")
+async def nmap_detailed_scan(
+    target: str,
+    ports: str = "1-1000",
+    aggressive: bool = False
+) -> Dict[str, Any]:
+    """
+    Detailed nmap scan with service version detection and OS fingerprinting
+
+    Args:
+        target: IP address or domain to scan
+        ports: Port range (e.g., "1-1000", "80,443,8080", or "top1000")
+        aggressive: Enable aggressive scanning (-A flag: OS detection, version detection, scripts)
+
+    Returns:
+        Dictionary with:
+        - open_ports: List of open ports with detailed service info
+        - services: Detected service names and versions
+        - os_detection: Operating system fingerprint (if aggressive=True)
+        - raw_output: Full nmap terminal output
+        - vulnerabilities: Potential vulnerabilities from NSE scripts (if aggressive=True)
+    """
+    return {
+        "tool": "nmap_detailed_scan",
+        "target": target,
+        "ports": ports,
+        "aggressive": aggressive
+    }

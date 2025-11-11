@@ -428,6 +428,219 @@ class DynamicKaliAgent:
 
         return results
 
+    async def ffuf_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Directory/file fuzzing with ffuf (Fast web fuzzer)
+
+        Uses SecLists wordlists for discovering hidden files and directories
+        """
+        url = params.get('url', '')
+        wordlist = params.get('wordlist', '/usr/share/wordlists/common.txt')
+        extensions = params.get('extensions', '')  # e.g., "php,html,txt"
+        threads = params.get('threads', '40')
+
+        results = {"url": url, "wordlist": wordlist, "found": []}
+
+        try:
+            # Build ffuf command
+            # FUZZ keyword is where wordlist items get inserted
+            fuzz_url = url.rstrip('/') + '/FUZZ'
+
+            cmd = [
+                'ffuf',
+                '-u', fuzz_url,
+                '-w', wordlist,
+                '-t', str(threads),
+                '-mc', '200,204,301,302,307,401,403',  # Match these status codes
+                '-fc', '404',  # Filter out 404s
+                '-timeout', '10',
+                '-maxtime', '60',  # Max 60 seconds
+                '-o', '/tmp/ffuf_output.json',
+                '-of', 'json',
+                '-s'  # Silent mode (less output)
+            ]
+
+            if extensions:
+                cmd.extend(['-e', extensions])
+
+            # Run ffuf
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=70  # 10 seconds more than ffuf's maxtime
+            )
+
+            # Parse JSON output
+            try:
+                import json
+                with open('/tmp/ffuf_output.json', 'r') as f:
+                    ffuf_data = json.load(f)
+
+                if 'results' in ffuf_data:
+                    for result in ffuf_data['results'][:50]:  # Limit to 50 results
+                        results["found"].append({
+                            'url': result.get('url', ''),
+                            'status': result.get('status', 0),
+                            'size': result.get('length', 0),
+                            'words': result.get('words', 0),
+                            'lines': result.get('lines', 0)
+                        })
+            except:
+                pass
+
+            results["discovered_count"] = len(results["found"])
+            results["note"] = f"Fuzzing completed. Found {len(results['found'])} interesting paths."
+
+        except asyncio.TimeoutError:
+            results["error"] = "Fuzzing timed out after 60 seconds"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def gobuster_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Directory brute-forcing with gobuster
+
+        Faster than dirb, uses SecLists wordlists
+        """
+        url = params.get('url', '')
+        wordlist = params.get('wordlist', '/usr/share/wordlists/common.txt')
+        extensions = params.get('extensions', '')  # e.g., "php,html"
+        threads = params.get('threads', '50')
+
+        results = {"url": url, "wordlist": wordlist, "found": []}
+
+        try:
+            cmd = [
+                'gobuster', 'dir',
+                '-u', url,
+                '-w', wordlist,
+                '-t', str(threads),
+                '-q',  # Quiet mode
+                '-n',  # No status
+                '--no-error',
+                '--timeout', '10s',
+                '-o', '/tmp/gobuster_output.txt'
+            ]
+
+            if extensions:
+                cmd.extend(['-x', extensions])
+
+            # Run gobuster
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=120  # 2 minutes max
+            )
+
+            # Parse output file
+            try:
+                with open('/tmp/gobuster_output.txt', 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            # Gobuster format: /path (Status: 200) [Size: 1234]
+                            parts = line.strip().split()
+                            if len(parts) >= 3:
+                                results["found"].append({
+                                    'path': parts[0],
+                                    'status': parts[2].rstrip(')') if len(parts) > 2 else 'unknown',
+                                    'line': line.strip()
+                                })
+            except:
+                pass
+
+            results["discovered_count"] = len(results["found"])
+            results["note"] = f"Directory brute-force completed. Found {len(results['found'])} paths."
+
+        except asyncio.TimeoutError:
+            results["error"] = "Gobuster timed out after 2 minutes"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+    async def nmap_detailed_scan(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Detailed nmap scan with service detection and OS fingerprinting
+
+        Shows full nmap output for transparency
+        """
+        target = params.get('target', '')
+
+        results = {"target": target, "raw_output": "", "parsed": {}}
+
+        try:
+            # Extract hostname/IP
+            host = target.replace('https://', '').replace('http://', '').split('/')[0]
+            ip = socket.gethostbyname(host)
+
+            # Run detailed nmap with aggressive options
+            cmd = [
+                'nmap',
+                '-sV',  # Service version detection
+                '-A',   # OS detection, version detection, script scanning
+                '-T4',  # Aggressive timing
+                '--top-ports', '1000',
+                '--open',  # Only show open ports
+                ip
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=180  # 3 minutes for detailed scan
+            )
+
+            raw_output = stdout.decode('utf-8', errors='ignore')
+            results["raw_output"] = raw_output
+            results["ip"] = ip
+
+            # Also use python-nmap for structured data
+            self.nm.scan(ip, arguments='-sV -T4 --top-ports 100')
+
+            open_ports = []
+            for host in self.nm.all_hosts():
+                for proto in self.nm[host].all_protocols():
+                    ports = self.nm[host][proto].keys()
+                    for port in ports:
+                        port_info = self.nm[host][proto][port]
+                        if port_info['state'] == 'open':
+                            open_ports.append({
+                                'port': port,
+                                'protocol': proto,
+                                'service': port_info.get('name', 'unknown'),
+                                'version': port_info.get('version', ''),
+                                'product': port_info.get('product', ''),
+                                'extrainfo': port_info.get('extrainfo', ''),
+                                'state': 'open'
+                            })
+
+            results["parsed"]["open_ports"] = open_ports
+            results["parsed"]["os_detection"] = self.nm[ip].get('osmatch', []) if ip in self.nm.all_hosts() else []
+
+        except asyncio.TimeoutError:
+            results["error"] = "Nmap scan timed out after 3 minutes"
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
 
 # Create agent instance
 agent = DynamicKaliAgent(AGENT_ID)
@@ -471,10 +684,11 @@ async def get_status():
         "status": "ready",
         "mode": "dynamic",
         "available_tools": [
-            "nmap_scan", "http_scan", "dns_enumerate", "resolve_domain",
+            "nmap_scan", "nmap_detailed_scan", "http_scan", "dns_enumerate", "resolve_domain",
             "javascript_analysis", "security_headers_check", "sql_injection_test",
             "xss_test", "api_fuzzing", "api_brute_force", "api_idor_test",
-            "api_rate_limit_test", "api_privilege_escalation_test", "detect_exposed_env_vars"
+            "api_rate_limit_test", "api_privilege_escalation_test", "detect_exposed_env_vars",
+            "ffuf_scan", "gobuster_scan"
         ]
     }
 

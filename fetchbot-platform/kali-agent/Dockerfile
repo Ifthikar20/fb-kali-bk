@@ -16,6 +16,10 @@ RUN apt-get update && apt-get install -y \
     whatweb \
     curl \
     wget \
+    # Modern fuzzers
+    ffuf \
+    gobuster \
+    wfuzz \
     # Database testing
     sqlmap \
     # Python and development
@@ -29,6 +33,17 @@ RUN apt-get update && apt-get install -y \
     net-tools \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
+
+# Install SecLists wordlists (industry-standard collection)
+RUN git clone --depth 1 https://github.com/danielmiessler/SecLists.git /usr/share/seclists && \
+    rm -rf /usr/share/seclists/.git
+
+# Create symlinks for common wordlist locations
+RUN ln -s /usr/share/seclists/Discovery/Web-Content/common.txt /usr/share/wordlists/common.txt && \
+    ln -s /usr/share/seclists/Discovery/Web-Content/big.txt /usr/share/wordlists/big.txt && \
+    ln -s /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt /usr/share/wordlists/dirlist.txt && \
+    ln -s /usr/share/seclists/Passwords/Common-Credentials/10-million-password-list-top-10000.txt /usr/share/wordlists/passwords.txt && \
+    ln -s /usr/share/seclists/Usernames/top-usernames-shortlist.txt /usr/share/wordlists/usernames.txt
 
 # Create working directory
 WORKDIR /app
