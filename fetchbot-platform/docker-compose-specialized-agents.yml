@@ -29,8 +29,8 @@ services:
   # ===========================
   kali-agent:
     build:
-      context: .
-      dockerfile: kali-agent/Dockerfile
+      context: ./kali-agent
+      dockerfile: Dockerfile
     container_name: kali-agent-tools
     ports:
       - "9000:9000"
