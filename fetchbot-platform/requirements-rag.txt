@@ -1,0 +1,15 @@
+# RAG System Dependencies
+
+# Vector Database
+chromadb==0.4.22
+# Alternative: pgvector for PostgreSQL
+# psycopg2-binary>=2.9.9
+
+# Embeddings
+sentence-transformers==2.3.1
+torch==2.1.2  # Required by sentence-transformers
+# Alternative: OpenAI embeddings
+# openai>=1.10.0
+
+# Additional dependencies
+numpy>=1.24.0

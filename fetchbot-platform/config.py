@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     # Security
     jwt_secret: str = "dev_secret_change_in_production"
 
+    # RAG Configuration
+    rag_enabled: bool = True
+    rag_vector_db: str = "chromadb"  # or "pgvector"
+    rag_chroma_persist_dir: str = "/data/chromadb"
+    rag_embedding_model: str = "all-MiniLM-L6-v2"
+    rag_embedding_dimensions: int = 384
+    rag_top_k_results: int = 5
+    rag_confidence_threshold: float = 0.7
+    rag_use_openai_embeddings: bool = False
+    openai_api_key: Optional[str] = None
+
     class Config:
         env_file = ".env"
 

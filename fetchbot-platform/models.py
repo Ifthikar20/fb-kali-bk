@@ -1,5 +1,5 @@
 """FetchBot.ai Database Models"""
-from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, JSON, ForeignKey, Text, Enum
+from sqlalchemy import create_engine, Column, String, DateTime, Boolean, Integer, JSON, ForeignKey, Text, Enum, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
@@ -38,6 +38,7 @@ class Organization(Base):
     
     # Relationships
     pentest_jobs = relationship("PentestJob", back_populates="organization")
+    rag_tool_executions = relationship("RAGToolExecution", back_populates="organization")
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -123,6 +124,8 @@ class PentestJob(Base):
 
     organization = relationship("Organization", back_populates="pentest_jobs")
     findings = relationship("Finding", back_populates="pentest_job")
+    rag_executions = relationship("RAGToolExecution", back_populates="scan")
+    rag_feedback = relationship("RAGFeedback", back_populates="scan")
 
 
 class Finding(Base):
@@ -157,6 +160,71 @@ class Finding(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     pentest_job = relationship("PentestJob", back_populates="findings")
+
+
+class RAGToolExecution(Base):
+    """Store tool execution metadata for RAG learning"""
+    __tablename__ = "rag_tool_executions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scan_id = Column(String(36), ForeignKey("pentest_jobs.id"))
+    organization_id = Column(String(36), ForeignKey("organizations.id"))
+    tool_name = Column(String(100), nullable=False)
+    agent_name = Column(String(255))
+    target_url = Column(String(500))
+    tech_stack_detected = Column(JSON, default=list)  # Array of detected technologies
+    parameters = Column(JSON, default=dict)
+    result_summary = Column(Text)
+    success = Column(Boolean, default=False)
+    findings_count = Column(Integer, default=0)
+    severity_distribution = Column(JSON, default=dict)
+    execution_time_seconds = Column(Float)
+    error_message = Column(Text)
+
+    # For RAG retrieval - reference to vector DB
+    embedding_id = Column(String(100))  # Reference to vector DB document ID
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    scan = relationship("PentestJob", back_populates="rag_executions")
+    organization = relationship("Organization", back_populates="rag_tool_executions")
+
+
+class RAGFeedback(Base):
+    """Track feedback on RAG suggestions for continuous improvement"""
+    __tablename__ = "rag_feedback"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    suggestion_id = Column(String(100))  # RAG retrieval result ID
+    tool_suggested = Column(String(100))
+    tool_actually_used = Column(String(100))
+    was_helpful = Column(Boolean)
+    confidence_score = Column(Float)  # Original RAG confidence
+    actual_relevance_score = Column(Float)  # User/agent feedback
+
+    scan_id = Column(String(36), ForeignKey("pentest_jobs.id"))
+    agent_name = Column(String(255))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    scan = relationship("PentestJob", back_populates="rag_feedback")
+
+
+class RAGEmbeddingsMeta(Base):
+    """Track embedding model versions and metadata"""
+    __tablename__ = "rag_embeddings_meta"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    model_name = Column(String(255))  # e.g., "all-MiniLM-L6-v2"
+    model_version = Column(String(100))
+    embedding_dimensions = Column(Integer)
+    total_documents_indexed = Column(Integer, default=0)
+    last_reindex_at = Column(DateTime)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 from config import get_settings
