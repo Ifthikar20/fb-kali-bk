@@ -11,6 +11,8 @@ from datetime import datetime
 
 from .agents.root_agent import RootAgent
 from .agents.agent_graph import get_agent_graph
+from .utils.logging import log_scan_status
+from .utils.container_manager import get_container_manager
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,10 @@ class DynamicOrchestrator:
         self,
         target: str,
         job_id: str,
-        organization_id: int = None
+        organization_id: int = None,
+        db_url: str = None,
+        use_dynamic_containers: bool = True,
+        num_agents: int = 3
     ) -> Dict[str, Any]:
         """
         Run complete security assessment using dynamic agents
@@ -49,6 +54,9 @@ class DynamicOrchestrator:
             target: Target URL, domain, or IP
             job_id: Unique job identifier
             organization_id: Organization ID (optional)
+            db_url: Database URL for logging (optional)
+            use_dynamic_containers: If True, spawn fresh containers per scan (default: True)
+            num_agents: Number of Kali agents to spawn (default: 3)
 
         Returns:
             Dictionary with:
@@ -58,18 +66,86 @@ class DynamicOrchestrator:
             - execution_time: How long the scan took
         """
         start_time = datetime.utcnow()
+        container_manager = None
+        spawned_agents = []
 
         logger.info(f"Starting dynamic scan for target: {target} (job_id: {job_id})")
 
+        # Clear agent graph from previous scans to prevent state pollution
+        agent_graph = get_agent_graph()
+        agent_graph.clear()
+        logger.info("Cleared agent graph from previous scans")
+
+        # Log scan start
+        log_scan_status(
+            job_id=job_id,
+            status="started",
+            details=f"Initializing security assessment for {target}",
+            db_url=db_url
+        )
+
         try:
-            # Create root coordinator agent
-            root_agent = RootAgent(target=target, job_id=job_id)
+            # Spawn dynamic Kali agent containers if enabled
+            if use_dynamic_containers:
+                logger.info(f"Spawning {num_agents} dynamic Kali agent containers...")
+                container_manager = get_container_manager()
+
+                log_scan_status(
+                    job_id=job_id,
+                    status="running",
+                    details=f"Spawning {num_agents} fresh Kali agent containers with target: {target}",
+                    db_url=db_url
+                )
+
+                spawned_agents = await container_manager.spawn_kali_agents(
+                    job_id=job_id,
+                    target_url=target,
+                    num_agents=num_agents
+                )
+
+                logger.info(f"Successfully spawned {len(spawned_agents)} Kali agents")
+
+                # Get sandbox URLs from spawned agents (use internal Docker network URLs)
+                sandbox_urls = [agent["agent_url"] for agent in spawned_agents]
+            else:
+                # Use static Kali agents (old behavior)
+                sandbox_urls = [
+                    "http://kali-agent-1:9000",
+                    "http://kali-agent-2:9000",
+                    "http://kali-agent-3:9000"
+                ]
+                logger.info("Using static Kali agent containers")
+
+            # Create root coordinator agent with available sandbox URLs
+            root_agent = RootAgent(
+                target=target,
+                job_id=job_id,
+                db_url=db_url,
+                sandbox_urls=sandbox_urls
+            )
+
+            log_scan_status(
+                job_id=job_id,
+                status="running",
+                details="Root coordinator agent created, beginning analysis",
+                db_url=db_url
+            )
 
             # Run assessment
             result = await root_agent.run_assessment()
 
             # Calculate execution time
             execution_time = (datetime.utcnow() - start_time).total_seconds()
+
+            # Log scan completion
+            log_scan_status(
+                job_id=job_id,
+                status="completed",
+                details=f"Assessment complete. Found {result['total_findings']} vulnerabilities "
+                       f"({result['critical_findings']} critical, {result['high_findings']} high) "
+                       f"in {execution_time:.1f}s",
+                db_url=db_url
+            )
 
             # Format result
             return {
@@ -82,11 +158,20 @@ class DynamicOrchestrator:
                 "critical_findings": result["critical_findings"],
                 "high_findings": result["high_findings"],
                 "execution_time_seconds": execution_time,
-                "completed_at": datetime.utcnow().isoformat()
+                "completed_at": datetime.utcnow().isoformat(),
+                "containers_used": len(spawned_agents) if use_dynamic_containers else 0
             }
 
         except Exception as e:
             logger.error(f"Dynamic scan failed for {target}: {e}", exc_info=True)
+
+            # Log scan failure
+            log_scan_status(
+                job_id=job_id,
+                status="failed",
+                details=f"Assessment failed: {str(e)}",
+                db_url=db_url
+            )
 
             return {
                 "status": "failed",
@@ -96,6 +181,17 @@ class DynamicOrchestrator:
                 "findings": [],
                 "execution_time_seconds": (datetime.utcnow() - start_time).total_seconds()
             }
+
+        finally:
+            # Clean up dynamic containers if they were spawned
+            if use_dynamic_containers and container_manager and spawned_agents:
+                try:
+                    logger.info(f"Cleaning up {len(spawned_agents)} dynamic containers for job {job_id}")
+                    await container_manager.cleanup_job_containers(job_id)
+                    logger.info("Container cleanup complete")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to cleanup containers: {cleanup_error}")
+                    # Don't raise - scan already completed or failed
 
     async def get_agent_graph(self, job_id: str) -> Dict[str, Any]:
         """

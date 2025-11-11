@@ -184,3 +184,66 @@ async def javascript_analysis(url: str) -> Dict[str, Any]:
         "tool": "javascript_analysis",
         "url": url
     }
+
+
+@register_tool(sandbox_execution=True, description="Fast web fuzzer for directory and file discovery")
+async def ffuf_scan(
+    url: str,
+    wordlist: str = "common",
+    extensions: Optional[str] = None,
+    threads: int = 40
+) -> Dict[str, Any]:
+    """
+    Fast web fuzzer using ffuf for discovering hidden directories and files
+
+    Args:
+        url: Base URL to fuzz (use FUZZ keyword for fuzzing point, e.g., "https://example.com/FUZZ")
+        wordlist: Wordlist to use - "common" (1000 entries), "medium" (20k entries), or absolute path
+        extensions: Comma-separated file extensions to test (e.g., "php,txt,bak")
+        threads: Number of concurrent threads (default: 40)
+
+    Returns:
+        Dictionary with:
+        - discovered: List of discovered paths with status codes and sizes
+        - total_requests: Number of requests made
+        - interesting_findings: Highlighted interesting responses
+        - wordlist_used: Which wordlist was used
+    """
+    return {
+        "tool": "ffuf_scan",
+        "url": url,
+        "wordlist": wordlist,
+        "extensions": extensions,
+        "threads": threads
+    }
+
+
+@register_tool(sandbox_execution=True, description="Directory and file brute-forcing with gobuster")
+async def gobuster_scan(
+    url: str,
+    wordlist: str = "common",
+    extensions: Optional[str] = None,
+    threads: int = 10
+) -> Dict[str, Any]:
+    """
+    Directory and file brute-forcing using gobuster
+
+    Args:
+        url: Base URL to scan
+        wordlist: Wordlist to use - "common", "medium", "large", or absolute path
+        extensions: Comma-separated file extensions (e.g., "php,html,txt")
+        threads: Number of concurrent threads (default: 10)
+
+    Returns:
+        Dictionary with:
+        - found_paths: List of discovered directories/files with status codes
+        - status_codes: HTTP status codes distribution
+        - wordlist_used: Which wordlist was used
+    """
+    return {
+        "tool": "gobuster_scan",
+        "url": url,
+        "wordlist": wordlist,
+        "extensions": extensions,
+        "threads": threads
+    }

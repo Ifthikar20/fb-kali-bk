@@ -38,18 +38,20 @@ class LLM:
     - Parsing responses
     """
 
-    def __init__(self, config: LLMConfig, prompts_dir: str = None):
+    def __init__(self, config: LLMConfig, prompts_dir: str = None, api_key: str = None):
         """
         Initialize LLM interface
 
         Args:
             config: LLM configuration
             prompts_dir: Path to prompts directory (defaults to core/prompts)
+            api_key: Anthropic API key (if not provided, reads from env)
         """
         self.config = config
 
         # Initialize Anthropic client
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable not set")
 
@@ -134,6 +136,10 @@ class LLM:
 
             # Parse response
             content = response.content[0].text
+
+            # Log the raw response for debugging
+            logger.debug(f"Raw LLM response: {content[:500]}...")  # First 500 chars
+
             tool_invocations = parse_tool_invocations(content)
             thinking = extract_thinking(content)
 

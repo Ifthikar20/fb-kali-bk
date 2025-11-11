@@ -21,17 +21,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load settings from .env file FIRST
+settings = get_settings()
+
 # Detect which orchestrator to use based on environment
-USE_DYNAMIC_AGENTS = os.environ.get('USE_DYNAMIC_AGENTS', 'false').lower() == 'true'
-USE_MULTI_KALI = os.environ.get('NUM_KALI_AGENTS')
+USE_DYNAMIC_AGENTS = settings.use_dynamic_agents
+NUM_KALI_AGENTS = settings.num_kali_agents
 
 if USE_DYNAMIC_AGENTS:
     from core.orchestrator import DynamicOrchestrator as OrchestratorClass
     NUM_AGENTS = 0
     print("[INIT] ✨ Using DYNAMIC MULTI-AGENT orchestrator (AI-driven agent creation)")
-elif USE_MULTI_KALI:
+elif NUM_KALI_AGENTS:
     from multi_kali_orchestrator import MultiKaliOrchestrator as OrchestratorClass
-    NUM_AGENTS = int(USE_MULTI_KALI)
+    NUM_AGENTS = NUM_KALI_AGENTS
     print(f"[INIT] Using Multi-Kali orchestrator with {NUM_AGENTS} agents")
 else:
     from bot_orchestrator import BotOrchestrator as OrchestratorClass
@@ -163,11 +166,16 @@ class Token(BaseModel):
     username: str
     organization_id: str
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
     settings = get_settings()
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(hours=24)  # Token expires in 24 hours
+
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(days=7)  # Default 7 days
+
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.jwt_secret, algorithm="HS256")
     return encoded_jwt
@@ -175,24 +183,24 @@ def create_access_token(data: dict) -> str:
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security),
                  db: Session = Depends(get_db)) -> User:
     """Verify JWT token and return user"""
-    token = credentials.credentials
     settings = get_settings()
+    token = credentials.credentials
 
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
         user_id: str = payload.get("sub")
-        if not user_id:
+        if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.active:
+    if user is None or not user.active:
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
     return user
 
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security),
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security), 
                    db: Session = Depends(get_db)) -> Organization:
     """Verify API key"""
     api_key = credentials.credentials
@@ -436,7 +444,7 @@ async def run_pentest_job(job_id: str, org_elastic_ip: str, target: str, db_url:
 
         # Call the correct method based on orchestrator type
         if USE_DYNAMIC_AGENTS:
-            results = await orchestrator.run_scan(target, job_id)
+            results = await orchestrator.run_scan(target, job_id, db_url=db_url)
         else:
             results = await orchestrator.execute_pentest(target)
         
@@ -509,12 +517,7 @@ async def run_dynamic_scan(job_id: str, org_elastic_ip: str, target: str, db_url
         })
 
         # Run dynamic scan
-        await ws_manager.send_event(job_id, "log", {
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "🔍 Launching security agents...",
-            "level": "INFO"
-        })
-        results = await orchestrator.run_scan(target, job_id)
+        results = await orchestrator.run_scan(target, job_id, db_url=db_url)
 
         # Store findings and broadcast each one
         for finding_data in results.get('findings', []):
@@ -756,11 +759,13 @@ async def get_job_report(
 async def start_dynamic_scan(
     scan_data: ScanCreate,
     background_tasks: BackgroundTasks,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Start a dynamic multi-agent security scan"""
-    org, user = auth
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     from config import get_settings
     settings = get_settings()
 
@@ -797,11 +802,13 @@ async def start_dynamic_scan(
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Get scan status with findings"""
-    org, user = auth
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
@@ -818,18 +825,13 @@ async def get_scan_status(
         {
             "id": f.id,
             "title": f.title,
-            "severity": f.severity.value,
+            "severity": f.severity.value.lower(),  # Frontend expects lowercase
             "type": f.vulnerability_type,
-            "description": f.description,
-            "discovered_by": f.discovered_by,
-            "payload": f.payload,
-            "url": f.url,
-            "evidence": f.evidence if hasattr(f, 'evidence') and f.evidence else {},
-            "remediation": f.remediation if hasattr(f, 'remediation') and f.remediation else {},
-            "cvss_score": f.cvss_score if hasattr(f, 'cvss_score') else None,
-            "cwe": f.cwe if hasattr(f, 'cwe') else None,
-            "owasp_category": f.owasp_category if hasattr(f, 'owasp_category') else None,
-            "discovered_at": f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None
+            "description": f.description or "",
+            "discovered_by": f.discovered_by or "Unknown",
+            "payload": f.payload or "",
+            "evidence": f.poc_code or "",
+            "url": f.url or ""
         }
         for f in findings
     ]
@@ -845,6 +847,8 @@ async def get_scan_status(
         "job_id": job.id,
         "status": job.status.value,
         "target": job.target,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         "findings": formatted_findings,
         "total_findings": job.total_findings or len(findings),
         "critical_findings": job.critical_count or 0,
@@ -861,14 +865,16 @@ async def get_scan_status(
     return response
 
 
-@app.get("/scan/{job_id}/logs")
-async def get_scan_logs(
+@app.delete("/scan/{job_id}")
+async def delete_scan(
     job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
-    """Get execution logs for a scan"""
-    org, user = auth
+    """Delete a scan and all its findings"""
+    org, user = verify_user_or_api_key(credentials, db)
+
+    # Find the scan
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
         PentestJob.organization_id == org.id
@@ -877,21 +883,26 @@ async def get_scan_logs(
     if not job:
         raise HTTPException(status_code=404, detail="Scan not found")
 
-    # Return execution logs (stored as JSON in execution_logs column)
-    return {
-        "job_id": job_id,
-        "logs": job.execution_logs if hasattr(job, 'execution_logs') and job.execution_logs else []
-    }
+    # Delete associated findings first
+    db.query(Finding).filter(Finding.pentest_job_id == job_id).delete()
+
+    # Delete the scan
+    db.delete(job)
+    db.commit()
+
+    return {"message": "Scan deleted successfully"}
 
 
 @app.get("/scan/{job_id}/agent-graph")
 async def get_agent_graph(
     job_id: str,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
     """Get agent hierarchy graph for visualization"""
-    org, user = auth
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
     # Verify job exists and belongs to organization
     job = db.query(PentestJob).filter(
         PentestJob.id == job_id,
@@ -926,16 +937,14 @@ async def list_scans(
     organization_id: Optional[str] = None,
     limit: int = 20,
     offset: int = 0,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
-    """List all scans for an organization with pagination"""
-    org, user = auth
-    query = db.query(PentestJob).filter(PentestJob.organization_id == org.id)
+    """List all scans for authenticated user/organization with pagination"""
+    org, user = verify_user_or_api_key(credentials, db)
 
-    # Apply filters
-    if organization_id:
-        query = query.filter(PentestJob.organization_id == organization_id)
+    # Query scans for the organization
+    query = db.query(PentestJob).filter(PentestJob.organization_id == org.id)
 
     # Get total count
     total = query.count()
@@ -949,18 +958,17 @@ async def list_scans(
         "offset": offset,
         "scans": [
             {
-                "id": job.id,
-                "name": job.name,
-                "target": job.target,
-                "status": job.status.value,
-                "created_at": job.created_at.isoformat() if job.created_at else None,
-                "started_at": job.started_at.isoformat() if job.started_at else None,
-                "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-                "total_findings": job.total_findings or 0,
-                "critical_count": job.critical_count or 0,
-                "high_count": job.high_count or 0
+                "job_id": scan.id,  # Frontend expects job_id
+                "name": scan.name,
+                "target": scan.target,
+                "status": scan.status.value,
+                "created_at": scan.created_at.isoformat() if scan.created_at else None,
+                "started_at": scan.started_at.isoformat() if scan.started_at else None,
+                "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+                "total_findings": scan.total_findings or 0,
+                "critical_findings": scan.critical_count or 0  # Frontend expects critical_findings
             }
-            for job in scans
+            for scan in scans
         ]
     }
 
@@ -970,35 +978,51 @@ async def list_findings(
     status: Optional[List[str]] = None,
     severity: Optional[List[str]] = None,
     scan_id: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 50,
     offset: int = 0,
-    auth: tuple = Depends(verify_user_or_api_key),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ):
-    """List findings with optional filters"""
-    org, user = auth
-    # Get all jobs for this organization
-    job_ids = db.query(PentestJob.id).filter(PentestJob.organization_id == org.id).all()
-    job_ids = [job_id[0] for job_id in job_ids]
+    """List all findings for authenticated user/organization with filtering"""
+    org, user = verify_user_or_api_key(credentials, db)
 
-    # Query findings
-    query = db.query(Finding).filter(Finding.pentest_job_id.in_(job_ids))
+    # Start with base query - join with PentestJob to filter by organization
+    query = db.query(Finding).join(PentestJob).filter(PentestJob.organization_id == org.id)
 
     # Apply filters
     if scan_id:
         query = query.filter(Finding.pentest_job_id == scan_id)
 
     if severity:
-        query = query.filter(Finding.severity.in_(severity))
+        # Convert severity strings to enum values
+        from models import Severity
+        severity_enums = []
+        for s in severity:
+            try:
+                severity_enums.append(Severity[s.upper()])
+            except KeyError:
+                pass
+        if severity_enums:
+            query = query.filter(Finding.severity.in_(severity_enums))
 
-    # Note: 'status' filter for findings - assuming all findings are 'open' by default
-    # If you have a status field on Finding model, add: query = query.filter(Finding.status.in_(status))
+    # Note: "status" filter on findings doesn't exist in current model
+    # If you want to filter by scan status instead:
+    if status:
+        from models import JobStatus
+        status_enums = []
+        for s in status:
+            try:
+                status_enums.append(JobStatus[s.upper()])
+            except KeyError:
+                pass
+        if status_enums:
+            query = query.filter(PentestJob.status.in_(status_enums))
 
     # Get total count
     total = query.count()
 
     # Apply pagination
-    findings = query.order_by(Finding.created_at.desc()).offset(offset).limit(limit).all()
+    findings = query.order_by(Finding.discovered_at.desc()).offset(offset).limit(limit).all()
 
     return {
         "total": total,
@@ -1006,85 +1030,83 @@ async def list_findings(
         "offset": offset,
         "findings": [
             {
-                "id": f.id,
-                "title": f.title,
-                "description": f.description,
-                "severity": f.severity.value,
-                "type": f.vulnerability_type,
-                "url": f.url,
-                "payload": f.payload,
-                "discovered_by": f.discovered_by,
-                "scan_id": f.pentest_job_id,
-                "evidence": f.evidence if hasattr(f, 'evidence') and f.evidence else {},
-                "remediation": f.remediation if hasattr(f, 'remediation') and f.remediation else {},
-                "cvss_score": f.cvss_score if hasattr(f, 'cvss_score') else None,
-                "cwe": f.cwe if hasattr(f, 'cwe') else None,
-                "owasp_category": f.owasp_category if hasattr(f, 'owasp_category') else None,
-                "discovered_at": f.discovered_at.isoformat() if hasattr(f, 'discovered_at') and f.discovered_at else None,
-                "created_at": f.created_at.isoformat() if f.created_at else None,
-                "status": "open"  # Add status field to Finding model if needed
+                "id": finding.id,
+                "pentest_job_id": finding.pentest_job_id,
+                "title": finding.title,
+                "description": finding.description,
+                "severity": finding.severity.value,
+                "vulnerability_type": finding.vulnerability_type,
+                "url": finding.url,
+                "payload": finding.payload,
+                "discovered_by": finding.discovered_by,
+                "discovered_at": finding.discovered_at.isoformat() if finding.discovered_at else None
             }
-            for f in findings
+            for finding in findings
         ]
     }
 
 
-@app.websocket("/ws/scan/{job_id}")
-async def websocket_scan_stream(websocket: WebSocket, job_id: str):
-    """
-    WebSocket endpoint for real-time scan event streaming
+@app.get("/scan/{job_id}/logs")
+async def get_scan_logs(
+    job_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Get execution logs for a scan (live updates during scan)"""
+    org, user = verify_user_or_api_key(credentials, db)
 
-    Connect: ws://localhost:8000/ws/scan/{job_id}
+    # Verify scan exists and belongs to organization
+    job = db.query(PentestJob).filter(
+        PentestJob.id == job_id,
+        PentestJob.organization_id == org.id
+    ).first()
 
-    Events sent to client:
-    - connected: Initial connection confirmation
-    - log: Scan progress logs
-    - status: Status changes (running, completed, failed)
-    - finding: New vulnerability discovered
-    - completed: Scan finished
-    - error: Scan failed
-    """
-    await ws_manager.connect(websocket, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scan not found")
 
-    try:
-        # Send initial connection message
-        await websocket.send_json({
-            "event": "connected",
-            "data": {"job_id": job_id, "message": "Connected to scan stream"}
-        })
+    # Return execution logs (empty array if none yet)
+    return {
+        "job_id": job_id,
+        "logs": job.execution_logs or []
+    }
 
-        logger.info(f"[WEBSOCKET] Client connected and waiting for scan events: {job_id}")
 
-        # Keep connection alive - events are sent via ws_manager.send_event() from background task
-        # This loop keeps the connection open and handles optional client messages
-        while True:
-            try:
-                # Use receive_text with timeout to keep connection alive
-                # but not block indefinitely
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+@app.get("/scans/{scan_id}/findings")
+async def get_scan_findings(
+    scan_id: str,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Get all findings for a specific scan"""
+    org, user = verify_user_or_api_key(credentials, db)
 
-                # Client can request current status
-                if data == "ping":
-                    await websocket.send_json({"event": "pong", "data": {}})
+    # Verify scan exists and belongs to organization
+    scan = db.query(PentestJob).filter(
+        PentestJob.id == scan_id,
+        PentestJob.organization_id == org.id
+    ).first()
 
-            except asyncio.TimeoutError:
-                # No message received, but that's ok - keep connection alive
-                # Send heartbeat to keep connection active
-                try:
-                    await websocket.send_json({"event": "heartbeat", "data": {}})
-                except:
-                    # Connection closed
-                    break
-            except WebSocketDisconnect:
-                # Client disconnected gracefully
-                break
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
 
-    except WebSocketDisconnect:
-        logger.info(f"[WEBSOCKET] Client disconnected: {job_id}")
-        ws_manager.disconnect(websocket, job_id)
-    except Exception as e:
-        logger.error(f"[WEBSOCKET] Error for job {job_id}: {e}")
-        ws_manager.disconnect(websocket, job_id)
+    # Get findings
+    findings = db.query(Finding).filter(Finding.pentest_job_id == scan_id).all()
+
+    return [
+        {
+            "id": finding.id,
+            "pentest_job_id": finding.pentest_job_id,
+            "title": finding.title,
+            "description": finding.description or "",
+            "severity": finding.severity.value.lower(),  # Lowercase for frontend
+            "vulnerability_type": finding.vulnerability_type,
+            "url": finding.url or "",
+            "payload": finding.payload or "",
+            "discovered_by": finding.discovered_by or "Unknown",
+            "discovered_at": finding.discovered_at.isoformat() if finding.discovered_at else None
+        }
+        for finding in findings
+    ]
 
 
 @app.get("/health")
