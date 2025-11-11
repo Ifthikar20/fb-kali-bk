@@ -75,12 +75,21 @@ def create_agent(
         "target": agent_state.target  # Propagate target to child agents
     }
 
+    # Enhance task with explicit target URL to prevent LLM from hallucinating example.com
+    enhanced_task = f"""TARGET: {agent_state.target}
+
+{task}
+
+CRITICAL: You MUST test ONLY the target URL specified above: {agent_state.target}
+Do NOT use example.com or any other placeholder URLs in your tool invocations.
+Always use the actual target URL ({agent_state.target}) when calling security testing tools."""
+
     # Create new agent
     new_agent = BaseAgent(
         config=agent_config,
         parent_id=agent_state.agent_id,
         name=name,
-        task=task
+        task=enhanced_task
     )
 
     logger.info(
@@ -114,8 +123,8 @@ def create_agent(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            # Run agent
-            result = loop.run_until_complete(new_agent.run(task))
+            # Run agent with enhanced task
+            result = loop.run_until_complete(new_agent.run(enhanced_task))
 
             # Send completion message to parent
             graph = get_agent_graph()
