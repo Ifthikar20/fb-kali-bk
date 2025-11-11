@@ -36,7 +36,13 @@ class RootAgent(BaseAgent):
     3. Network agent finds open ports → Creates service-specific agents
     """
 
-    def __init__(self, target: str, job_id: str, db_url: str = None):
+    def __init__(
+        self,
+        target: str,
+        job_id: str,
+        db_url: str = None,
+        sandbox_urls: list = None
+    ):
         """
         Initialize root coordinator agent
 
@@ -44,14 +50,20 @@ class RootAgent(BaseAgent):
             target: Target URL, domain, or IP to assess
             job_id: Unique job identifier for this assessment
             db_url: Database URL for execution logging (optional)
+            sandbox_urls: List of Kali agent sandbox URLs for load distribution (optional)
         """
         # Root agent has NO prompt modules (empty list)
         llm_config = LLMConfig(prompt_modules=[])
 
+        # Use first sandbox URL as default, or fallback
+        if not sandbox_urls:
+            sandbox_urls = ["http://kali-agent-1:9000"]
+
         config = {
             "llm_config": llm_config,
             "max_iterations": 100,  # Root agent can run longer
-            "sandbox_url": "http://kali-agent-1:9000",
+            "sandbox_url": sandbox_urls[0],  # Use first URL for root
+            "sandbox_urls": sandbox_urls,  # Store all URLs for distribution
             "db_url": db_url,
             "job_id": job_id,
             "target": target  # Target URL/domain
@@ -89,8 +101,13 @@ Remember: ALWAYS use {target} - no other URL is valid for this scan.
         self.target = target
         self.job_id = job_id
         self.db_url = db_url
+        self.sandbox_urls = sandbox_urls
+        self._sandbox_url_index = 0  # For round-robin distribution
 
-        logger.info(f"Root coordinator initialized for target: {target}")
+        logger.info(
+            f"Root coordinator initialized for target: {target} "
+            f"with {len(sandbox_urls)} sandbox agents"
+        )
 
     async def run_assessment(self) -> Dict[str, Any]:
         """
@@ -159,153 +176,69 @@ YOUR MISSION:
 Conduct a THOROUGH, METHODICAL security assessment. Take your time. Be complete.
 You do NOT perform scans directly - you delegate to specialized agents.
 
-CRITICAL: PACE AND VISIBILITY
+STRATEGY:
 
-This is NOT a race. The user wants to SEE what's happening at each step.
+1. START WITH RECONNAISSANCE
+   - Create a reconnaissance agent to understand the target
+   - This agent should use: http_scan, dns_enumerate, resolve_domain
+   - Wait for recon results before proceeding
 
-DO:
-✅ Run one major phase at a time (recon, then discovery, then testing)
-✅ WAIT for each agent to complete before moving to next decision
-✅ Let long-running tools finish (nmap can take minutes, fuzzing can take longer)
-✅ Show progress: "Started X", "X is running...", "X completed, found Y"
-✅ Explore ALL discovered attack surface before finishing
-✅ Only call finish_scan when you've tested EVERYTHING
+2. ANALYZE RECONNAISSANCE RESULTS
+   When recon completes, you'll receive a message with findings.
+   Based on what's discovered, create specialized agents:
 
-DON'T:
-❌ Rush through the scan
-❌ Create too many agents at once
-❌ Move to next step before current agents finish
-❌ Finish scan while there are still untested areas
-❌ Skip opportunities because they "might not have vulns"
+   IF APIs DISCOVERED:
+   - Create "API Security Agent" with modules: api_testing
+   - Task: Test API endpoints for:
+     * Fuzzing (api_fuzzing)
+     * Brute force (api_brute_force)
+     * IDOR (api_idor_test)
+     * Rate limiting (api_rate_limit_test)
+     * Environment variables (detect_exposed_env_vars)
 
-THINK LIKE A REAL PENTESTER:
+   IF DATABASE DETECTED (MySQL, PostgreSQL, etc.):
+   - Create "SQL Injection Agent" with modules: sql_injection
+   - Task: Test for SQL injection using sql_injection_test and sqlmap_test
 
-Real pentesters work methodically:
-1. Run tool → WAIT for it to complete → Review results carefully
-2. Find something interesting → Plan investigation → Execute → WAIT
-3. Get results → Analyze thoroughly → Decide what's next → Execute
-4. Repeat until ALL possibilities exhausted
+   IF FORMS/INPUTS FOUND:
+   - Create "XSS Testing Agent" with modules: xss
+   - Task: Test for XSS vulnerabilities using xss_test
 
-Example of CORRECT pacing:
+   IF AUTHENTICATION ENDPOINTS FOUND:
+   - Create "Authentication Testing Agent" with modules: authentication
+   - Task: Test auth security, brute force resistance, session management
 
-PHASE 1: RECONNAISSANCE (Day 1)
-→ Create recon agent with task: "Run nmap on {self.target}, discover open ports and services"
-→ WAIT (nmap takes time, let it run)
-→ Receive message: "nmap complete - found ports 22 (SSH), 80 (HTTP), 443 (HTTPS)"
-→ Think: "Web services on 80/443 are high-value targets. SSH on 22 could be bruteforced"
+   IF OPEN PORTS FOUND (from network scan):
+   - Create agents for specific services (SSH, FTP, etc.)
 
-PHASE 2: WEB DISCOVERY (Day 2)
-→ Create mapping agent: "Map web application structure on port 80/443"
-→ Agent uses http_scan, discovers: Apache, /admin, /api, /uploads, /login
-→ WAIT for mapping to complete
-→ Think: "/api is promising (data endpoints), /admin is sensitive, /uploads could allow malicious files"
+   IF ENVIRONMENT VARIABLES EXPOSED:
+   - Use detect_exposed_env_vars and scan_env_files
+   - Create vulnerability reports for any secrets found
 
-PHASE 3: DIRECTORY FUZZING (Day 3)
-→ Create fuzzing agent: "Run directory fuzzing on /api to find all endpoints"
-→ WAIT (fuzzing takes time - could be 5-10 minutes)
-→ UI shows: "🔍 Directory fuzzing in progress on /api..."
-→ Agent completes: "Found /api/v1/users, /api/v1/auth, /api/v1/posts, /api/admin"
-→ Think: "/api/admin is unusual, /api/v1/users handles user data (IDOR risk)"
+3. MONITOR AGENT PROGRESS
+   - Use get_my_agents to check on created agents
+   - Use get_scan_status to see overall progress
+   - Read messages from agents (they'll notify you when done)
 
-PHASE 4: RECURSIVE DISCOVERY (Day 4)
-→ Create agent: "Recursively fuzz /api/admin to find sub-paths"
-→ WAIT for recursive fuzzing
-→ Results: "/api/admin/users, /api/admin/settings, /api/admin/logs"
-→ Think: "Admin endpoints found, these need security testing"
+   ⚠️ CRITICAL: You MUST wait for ALL child agents to complete before proceeding!
+   - Each agent will send you a completion message when done
+   - Keep checking get_my_agents until all agents show status="completed"
+   - DO NOT call finish_scan until you've received completion messages from ALL agents
+   - If you call finish_scan too early, the containers will be shut down mid-scan!
 
-PHASE 5: VULNERABILITY TESTING (Day 5+)
-→ Create focused agents for each finding:
-  - "Test /api/v1/users for IDOR vulnerability"
-  - "Test /api/admin for authentication bypass"
-  - "Test /uploads for malicious file upload"
-  - "Test /login for SQL injection"
-→ WAIT for each test to complete
-→ Review results from each agent
-→ If vulnerability found → Document it
-→ If nothing found → Move on
+4. MAKE STRATEGIC DECISIONS
+   - Don't create duplicate agents
+   - Prioritize high-impact tests
+   - If agents find nothing, move on
+   - Create follow-up agents based on discoveries
 
-PHASE 6: FOLLOW-UP (Day 6+)
-→ If IDOR found in /api/v1/users → Test other endpoints for same issue
-→ If auth bypass found → Test what actions possible
-→ If file upload vulnerable → Test for RCE
-→ Keep investigating until ALL leads exhausted
+5. AGGREGATE AND FINISH
+   - ⚠️ ONLY after ALL child agents have completed (check get_my_agents)
+   - Review all findings from completed agents
+   - Use finish_scan to mark assessment complete
+   - Provide summary of what was tested
 
-PHASE 7: FINAL CHECKS (Day 7)
-→ Review everything tested
-→ Check if any areas missed
-→ Run final verification tests
-→ ONLY THEN call finish_scan
-
-YOUR WORKFLOW:
-
-Step 1: INITIAL RECONNAISSANCE (Start here, wait for completion)
-Create agent: "Perform initial reconnaissance - nmap scan, service detection, basic http_scan"
-WAIT for completion.
-When done, you'll receive a message with results.
-
-Step 2: ANALYZE RESULTS (Think deeply)
-- What ports are open? What services?
-- Is there a web app? What technology?
-- Any interesting paths discovered?
-- What are the high-value targets?
-
-Step 3: DEEP DISCOVERY (One area at a time)
-Based on what was found, create focused agents:
-- If web app exists → "Map all directories and endpoints"
-  WAIT for mapping to complete
-- If API found → "Enumerate all API endpoints"
-  WAIT for enumeration
-- If specific path interesting (like /login) → "Recursively explore /login"
-  WAIT for recursive exploration
-
-Step 4: VULNERABILITY TESTING (Methodical and complete)
-For EACH interesting finding, create a testing agent:
-- "Test /api/users?id= for SQL injection"
-  WAIT for test to complete, review results
-- "Test /api/users for IDOR by accessing different user IDs"
-  WAIT for test to complete, review results
-- "Test /login form for authentication bypass"
-  WAIT for test to complete, review results
-
-Create ONE or TWO testing agents at a time (not 10 at once).
-Let them finish. Review results. Then create more.
-
-Step 5: FOLLOW-UP INVESTIGATION (Based on findings)
-If tests discover vulnerabilities:
-- Create follow-up agents to understand full impact
-- Test related endpoints for similar issues
-- Verify exploitability
-
-If tests find nothing:
-- Move to next attack surface
-- Don't give up too early
-
-Step 6: EXHAUSTIVE COVERAGE (Be thorough)
-Before finishing, ask yourself:
-- Did we test ALL discovered endpoints?
-- Did we try ALL relevant attack types?
-- Are there any untested directories?
-- Did we follow up on ALL interesting findings?
-- Have we exhausted every possibility?
-
-Step 7: FINISH ONLY WHEN COMPLETE
-Call finish_scan ONLY when:
-✅ All discovered attack surface has been tested
-✅ All interesting findings have been investigated
-✅ No more agents are running
-✅ You've done everything a thorough pentester would do
-
-COMMUNICATION WITH UI:
-
-The user is watching the UI. They want to see progress:
-- "🔍 Starting nmap scan..."
-- "⏳ Nmap in progress (may take 2-5 minutes)..."
-- "✅ Nmap complete: Found 3 open ports"
-- "🌐 Mapping web application structure..."
-- "⏳ Directory fuzzing in progress..."
-- "✅ Found 15 directories, analyzing..."
-
-Agents automatically log their actions. Your job: WAIT and let them complete.
+   REMINDER: finish_scan triggers container cleanup! Only call it when 100% done.
 
 IMPORTANT RULES:
 

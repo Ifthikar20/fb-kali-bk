@@ -1,0 +1,261 @@
+version: '3.8'
+
+services:
+  # ===========================
+  # Orchestrator Service
+  # ===========================
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    container_name: orchestrator
+    ports:
+      - "8001:8001"
+    environment:
+      - ORCHESTRATOR_PORT=8001
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================
+  # Kali Tool Container
+  # (Shared by all agents for tool execution)
+  # ===========================
+  kali-agent:
+    build:
+      context: ./kali-agent
+      dockerfile: Dockerfile
+    container_name: kali-agent-tools
+    ports:
+      - "9000:9000"
+    environment:
+      - AGENT_ID=kali-tools-1
+      - AGENT_PORT=9000
+    networks:
+      - agent-network
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===========================
+  # Specialized Agents
+  # ===========================
+
+  # Network Agent - Port scanning, DNS enumeration
+  network-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.network
+    environment:
+      - AGENT_ID=network-agent-1
+      - AGENT_TYPE=network
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9100
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  network-agent-2:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.network
+    environment:
+      - AGENT_ID=network-agent-2
+      - AGENT_TYPE=network
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9100
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  # Fuzzing Agent - API fuzzing, directory enumeration
+  fuzzing-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.fuzzing
+    environment:
+      - AGENT_ID=fuzzing-agent-1
+      - AGENT_TYPE=fuzzing
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9101
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  fuzzing-agent-2:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.fuzzing
+    environment:
+      - AGENT_ID=fuzzing-agent-2
+      - AGENT_TYPE=fuzzing
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9101
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  # SQL Injection Agent - SQL injection testing
+  sqli-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.sqli
+    environment:
+      - AGENT_ID=sqli-agent-1
+      - AGENT_TYPE=sqli
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9102
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  sqli-agent-2:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.sqli
+    environment:
+      - AGENT_ID=sqli-agent-2
+      - AGENT_TYPE=sqli
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9102
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  # Recon Agent - Web reconnaissance
+  recon-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.recon
+    environment:
+      - AGENT_ID=recon-agent-1
+      - AGENT_TYPE=recon
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9103
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  # XSS Agent - XSS and CSRF testing
+  xss-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.xss
+    environment:
+      - AGENT_ID=xss-agent-1
+      - AGENT_TYPE=xss
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9104
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  # Auth Agent - Authentication/authorization testing
+  auth-agent-1:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.auth
+    environment:
+      - AGENT_ID=auth-agent-1
+      - AGENT_TYPE=auth
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9105
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+  auth-agent-2:
+    build:
+      context: .
+      dockerfile: agents/Dockerfile.auth
+    environment:
+      - AGENT_ID=auth-agent-2
+      - AGENT_TYPE=auth
+      - ORCHESTRATOR_URL=http://orchestrator:8001
+      - KALI_AGENT_URL=http://kali-agent:9000
+      - AGENT_PORT=9105
+      - PYTHONPATH=/app
+    networks:
+      - agent-network
+    depends_on:
+      - orchestrator
+      - kali-agent
+    restart: unless-stopped
+
+networks:
+  agent-network:
+    driver: bridge
+
+# Summary:
+# - 1 orchestrator container
+# - 1 shared Kali tools container
+# - 10 specialized agent containers
+#   - 2 Network Agents
+#   - 2 Fuzzing Agents
+#   - 2 SQL Injection Agents
+#   - 1 Recon Agent
+#   - 1 XSS Agent
+#   - 2 Auth Agents
+#
+# Total: 12 containers
+#
+# Scaling:
+# To add more agents of a specific type:
+# docker-compose -f docker-compose-specialized-agents.yml up --scale fuzzing-agent=5

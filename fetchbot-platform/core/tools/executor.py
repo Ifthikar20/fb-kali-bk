@@ -202,11 +202,61 @@ async def process_tool_invocations(
     Returns:
         bool: True if agent should finish, False otherwise
     """
+    import re
+
+    # Get actual target URL from agent state
+    actual_target = getattr(agent_state, 'target', None)
+
+    # Common placeholder URLs that LLM hallucinates
+    placeholder_patterns = [
+        r'https?://(?:www\.)?example\.com',
+        r'https?://(?:www\.)?test\.com',
+        r'https?://(?:api\.)?example\.com',
+        r'https?://target\.com',
+        r'https?://example\.org',
+        r'https?://test\.example\.com',
+        r'\b(?:192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.16\.\d+\.\d+)\b',  # Private IPs
+    ]
+
+    def auto_fix_url_params(args: dict, target: str) -> dict:
+        """Auto-replace placeholder URLs with actual target"""
+        if not target:
+            return args
+
+        fixed_args = {}
+        for key, value in args.items():
+            if isinstance(value, str):
+                # Replace any placeholder URL with actual target
+                fixed_value = value
+                for pattern in placeholder_patterns:
+                    if re.search(pattern, value, re.IGNORECASE):
+                        # Extract the path/query from placeholder if present
+                        match = re.match(r'https?://[^/]+(/.*)$', value)
+                        path = match.group(1) if match else ''
+
+                        # Replace with actual target + path
+                        fixed_value = target.rstrip('/') + path
+
+                        logger.warning(
+                            f"🔧 Auto-fixed placeholder URL in parameter '{key}': "
+                            f"{value} → {fixed_value}"
+                        )
+                        break
+
+                fixed_args[key] = fixed_value
+            else:
+                fixed_args[key] = value
+
+        return fixed_args
+
     should_finish = False
 
     for tool_inv in tool_invocations:
         tool_name = tool_inv.get("toolName")
         args = tool_inv.get("args", {})
+
+        # Auto-fix any placeholder URLs in arguments
+        args = auto_fix_url_params(args, actual_target)
 
         logger.info(f"Executing tool: {tool_name}")
 

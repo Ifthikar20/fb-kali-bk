@@ -38,9 +38,6 @@ class Settings(BaseSettings):
     # Security
     jwt_secret: str = "dev_secret_change_in_production"
 
-    # Dynamic Agent System (NEW!)
-    use_dynamic_agents: bool = False
-
     class Config:
         env_file = ".env"
 

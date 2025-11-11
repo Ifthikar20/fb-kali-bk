@@ -128,23 +128,34 @@ class PentestJob(Base):
 class Finding(Base):
     """Security finding"""
     __tablename__ = 'findings'
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     pentest_job_id = Column(String(36), ForeignKey('pentest_jobs.id'), nullable=False)
-    
+
     title = Column(String(500), nullable=False)
     description = Column(Text)
     severity = Column(Enum(Severity), nullable=False)
     vulnerability_type = Column(String(100))
-    
+
     url = Column(String(1000))
     payload = Column(Text)
     poc_code = Column(Text)
     screenshot_url = Column(String(500))
-    
+
     discovered_by = Column(String(50))
     discovered_at = Column(DateTime, default=datetime.utcnow)
-    
+
+    # Detailed evidence and remediation (JSON)
+    evidence = Column(JSON, default=dict)  # Technical evidence: headers, payloads, detection method
+    remediation = Column(JSON, default=dict)  # Fix instructions, code examples, references
+
+    # Risk classification
+    cvss_score = Column(Integer)  # CVSS score (0-10)
+    cwe = Column(String(200))  # CWE identifier
+    owasp_category = Column(String(200))  # OWASP Top 10 category
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
     pentest_job = relationship("PentestJob", back_populates="findings")
 
 

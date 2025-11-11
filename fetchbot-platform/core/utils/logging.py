@@ -141,24 +141,32 @@ def log_tool_execution(job_id: str, tool_name: str, agent_name: str, target: str
     )
 
 
-def log_finding_discovered(job_id: str, finding_title: str, severity: str, agent_name: str, db_url: Optional[str] = None):
-    """Log vulnerability discovered"""
+def log_finding_discovered(
+    job_id: str,
+    finding_title: str,
+    severity: str,
+    agent_name: str,
+    finding_details: str = None,
+    db_url: Optional[str] = None
+):
+    """
+    Log vulnerability discovered with full details
 
-    # Severity emojis for visibility
-    severity_icons = {
-        "CRITICAL": "🔴",
-        "HIGH": "🟠",
-        "MEDIUM": "🟡",
-        "LOW": "🔵",
-        "INFO": "ℹ️"
-    }
-
-    icon = severity_icons.get(severity.upper(), "⚠️")
+    Args:
+        job_id: Scan job ID
+        finding_title: Short title of vulnerability
+        severity: Severity level (CRITICAL, HIGH, etc.)
+        agent_name: Name of agent that found it
+        finding_details: Full detailed report (description, evidence, remediation)
+        db_url: Database URL
+    """
+    # Use detailed log if provided, otherwise just title
+    details_text = finding_details if finding_details else finding_title
 
     add_execution_log(
         job_id=job_id,
-        action=f"{icon} {severity.upper()} Vulnerability Found",
-        details=finding_title,
+        action=f"Found {severity.upper()} vulnerability",
+        details=details_text,
         agent=agent_name,
         db_url=db_url
     )
