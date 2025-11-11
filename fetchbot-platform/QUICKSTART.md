@@ -1,233 +1,125 @@
-# FetchBot Dynamic Agent System - Quick Start
+# FetchBot.ai - Quick Start Guide
 
-**Get up and running in 3 steps!**
-
----
-
-## Step 1: Verify Setup ✅
-
-Check that all components are in place:
+## 🚀 One-Command Setup
 
 ```bash
-./verify-setup.sh
+./scripts/setup_and_run.sh
 ```
 
-**Expected output:**
-```
-✅ All checks passed! System is ready.
-```
+This script will:
+1. ✅ Stop conflicting PostgreSQL services
+2. ✅ Start Docker containers (PostgreSQL + Redis)
+3. ✅ Create `.env` file if needed
+4. ✅ Setup Python virtual environment
+5. ✅ Install dependencies
+6. ✅ Initialize database
+7. ✅ Create admin user
 
-If you see errors, review the output and fix any missing files.
+## 📋 Prerequisites
 
----
+- **Docker Desktop** installed and running
+- **Python 3.10+** installed
+- **Homebrew** (macOS) - optional
 
-## Step 2: Create Environment File 🔧
+## 🔧 Manual Setup (If Script Fails)
+
+### 1. Stop Conflicting Services
 
 ```bash
-./create-env.sh
+# Stop Homebrew PostgreSQL (if installed)
+brew services stop postgresql@14
+
+# Verify nothing is on port 5432
+lsof -i :5432
 ```
 
-This creates a `.env` file with required configuration.
-
-**IMPORTANT:** Edit the file to add your Anthropic API key:
+### 2. Start Docker Infrastructure
 
 ```bash
-nano .env
+# Start PostgreSQL and Redis
+docker-compose -f docker-compose-multi-kali.yml up -d postgres redis
+
+# Wait for services to be healthy
+docker-compose -f docker-compose-multi-kali.yml ps
 ```
 
-Replace `sk-ant-api03-your-actual-key-here` with your real API key from https://console.anthropic.com/
+### 3. Create `.env` File
 
-**Your .env should have:**
 ```bash
-ANTHROPIC_API_KEY=sk-ant-api03-xxxxx-your-real-key-xxxxx
+cp .env.example .env
+```
+
+**Edit `.env` and set these values:**
+
+```bash
+# IMPORTANT: Use localhost, not postgres!
+DATABASE_URL=postgresql://fetchbot:fetchbot123@localhost:5432/fetchbot
+REDIS_URL=redis://localhost:6379
+
+# Get your API key from https://console.anthropic.com/
+ANTHROPIC_API_KEY=sk-ant-api03-your-actual-key-here
+
+# Enable dynamic containers
 USE_DYNAMIC_AGENTS=true
 ```
 
-Save and exit (Ctrl+X, Y, Enter)
+### 4. Setup Python Environment
 
----
-
-## Step 3: Start the System 🚀
-
-**Build the containers:**
 ```bash
-docker-compose build api --no-cache
+# Create virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate  # macOS/Linux
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-This takes ~30-60 seconds. It installs all dependencies including jinja2 and email-validator.
+### 5. Initialize Database
 
-**Start all services:**
 ```bash
-docker-compose up -d
+# Create tables
+python -c "from models import init_db; init_db()"
+
+# Create admin user
+python scripts/create_admin_user.py
 ```
 
-**Watch the logs:**
+### 6. Build Kali Agent Image (For Dynamic Containers)
+
 ```bash
-docker-compose logs -f api
+docker build -t fetchbot-kali-agent:latest -f kali-agent/Dockerfile kali-agent/
 ```
 
-**Look for this success message:**
+## ▶️ Run the Application
+
+```bash
+# Make sure venv is activated
+source venv/bin/activate
+
+# Run the server
+python main.py
+```
+
+You should see:
 ```
 [INIT] ✨ Using DYNAMIC MULTI-AGENT orchestrator (AI-driven agent creation)
-INFO - Registered tool: create_agent (sandbox=False)
-INFO - Registered tool: api_fuzzing (sandbox=True)
-... (30+ tools)
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
----
+## 🧪 Test Dynamic Containers
 
-## Test It Works! 🧪
+Watch containers spawn and cleanup automatically!
 
-**Check health:**
 ```bash
-curl http://localhost:8000/health
-# Should return: {"status":"healthy"}
+# In another terminal
+watch -n 1 'docker ps --filter "label=managed_by=fetchbot-dynamic"'
 ```
 
-**Open API docs:**
-```bash
-# In browser:
-http://localhost:8000/docs
-```
+**Login:** http://localhost:8000
+- Username: `admin`
+- Password: `admin123`
 
-**Run complete test:**
-```bash
-chmod +x test-system.sh
-./test-system.sh
-```
+## 📞 Troubleshooting
 
----
-
-## What's Different?
-
-### OLD System (Fixed Bots):
-```
-User → API → Always runs 3 bots:
-  • network-bot
-  • ui-bot
-  • db-bot
-```
-
-### NEW System (Dynamic Agents):
-```
-User → API → Root Coordinator Agent
-         ↓
-    Claude analyzes target
-         ↓
-    Creates specialized agents dynamically:
-    • Recon Agent (discovers attack surface)
-    • API Security Agent (if APIs found)
-    • SQL Injection Agent (if database detected)
-    • XSS Agent (if forms found)
-    • ... whatever Claude decides is needed!
-```
-
-**Key Benefits:**
-- ✅ Adaptive testing - different agents for different targets
-- ✅ Specialized expertise - each agent has deep knowledge
-- ✅ Efficient - only tests relevant attack vectors
-- ✅ Intelligent - Claude makes all decisions
-
----
-
-## Quick Reference
-
-| Command | Purpose |
-|---------|---------|
-| `./verify-setup.sh` | Check all files are in place |
-| `./create-env.sh` | Generate .env file template |
-| `docker-compose build api --no-cache` | Rebuild API container |
-| `docker-compose up -d` | Start all services |
-| `docker-compose down` | Stop all services |
-| `docker-compose logs -f api` | Watch API logs |
-| `docker-compose ps` | Check container status |
-| `curl http://localhost:8000/health` | Health check |
-
----
-
-## Documentation
-
-- **COMPLETE_SETUP_GUIDE.md** - Detailed setup with troubleshooting
-- **DYNAMIC_AGENT_USAGE.md** - How the agent system works
-- **DYNAMIC_ARCHITECTURE_PLAN.md** - Technical architecture details
-- **IMPLEMENTATION_SUMMARY.md** - What was built
-
----
-
-## Troubleshooting
-
-**Container keeps restarting?**
-```bash
-docker-compose logs api --tail=50
-```
-
-Common causes:
-1. Missing ANTHROPIC_API_KEY → Add to .env
-2. Invalid API key → Check at console.anthropic.com
-3. Missing dependencies → Rebuild with --no-cache
-
-**Can't connect to API?**
-```bash
-docker-compose ps | grep api
-# Should show "Up", not "Restarting"
-```
-
-**Need help?**
-See COMPLETE_SETUP_GUIDE.md for detailed troubleshooting.
-
----
-
-## What Happens When You Start a Scan?
-
-1. **You call the API:**
-   ```bash
-   POST /scan
-   {
-     "target": "http://example.com",
-     "organization_id": 1
-   }
-   ```
-
-2. **Root Coordinator starts:**
-   - Analyzes target
-   - Creates Reconnaissance Agent
-   - Waits for recon results
-
-3. **Recon Agent discovers:**
-   - API endpoints at `/api/*`
-   - Login form at `/login`
-   - MySQL database detected
-
-4. **Root creates specialized agents:**
-   - API Security Agent (api_testing module)
-   - SQL Injection Agent (sql_injection module)
-   - XSS Agent (xss module)
-
-5. **Each agent runs independently:**
-   - API agent finds exposed .env vars → CRITICAL finding
-   - SQL agent finds injection → HIGH finding
-   - XSS agent finds nothing → completes quickly
-
-6. **Root aggregates results:**
-   ```json
-   {
-     "status": "completed",
-     "total_findings": 2,
-     "critical_findings": 1,
-     "high_findings": 1,
-     "agents_created": [
-       {"name": "Recon Agent", "status": "completed"},
-       {"name": "API Security Agent", "findings": 1},
-       {"name": "SQL Injection Agent", "findings": 1},
-       {"name": "XSS Agent", "findings": 0}
-     ]
-   }
-   ```
-
-**All decisions made by Claude AI - zero hardcoding!** 🚀
-
----
-
-**Ready to test? Run `./verify-setup.sh` then `./create-env.sh`!**
+See full guide in `DYNAMIC_CONTAINERS_SETUP.md`
