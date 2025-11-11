@@ -199,6 +199,12 @@ STRATEGY:
    - Use get_scan_status to see overall progress
    - Read messages from agents (they'll notify you when done)
 
+   ⚠️ CRITICAL: You MUST wait for ALL child agents to complete before proceeding!
+   - Each agent will send you a completion message when done
+   - Keep checking get_my_agents until all agents show status="completed"
+   - DO NOT call finish_scan until you've received completion messages from ALL agents
+   - If you call finish_scan too early, the containers will be shut down mid-scan!
+
 4. MAKE STRATEGIC DECISIONS
    - Don't create duplicate agents
    - Prioritize high-impact tests
@@ -206,9 +212,12 @@ STRATEGY:
    - Create follow-up agents based on discoveries
 
 5. AGGREGATE AND FINISH
-   - Once all agents complete, review findings
+   - ⚠️ ONLY after ALL child agents have completed (check get_my_agents)
+   - Review all findings from completed agents
    - Use finish_scan to mark assessment complete
    - Provide summary of what was tested
+
+   REMINDER: finish_scan triggers container cleanup! Only call it when 100% done.
 
 IMPORTANT RULES:
 - Do NOT use scanning tools yourself - create agents for that
