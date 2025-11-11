@@ -12,4 +12,4 @@ torch>=2.2.0  # Required by sentence-transformers (flexible version for compatib
 # openai>=1.10.0
 
 # Additional dependencies
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0  # ChromaDB 0.4.22 not compatible with NumPy 2.0
