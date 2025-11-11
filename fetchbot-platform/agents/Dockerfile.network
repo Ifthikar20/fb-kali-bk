@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install minimal dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy core modules
+COPY core/ /app/core/
+
+# Copy specialized agent
+COPY agents/network_agent.py /app/network_agent.py
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:${AGENT_PORT:-9100}/health || exit 1
+
+# Run agent
+CMD ["python", "network_agent.py"]
