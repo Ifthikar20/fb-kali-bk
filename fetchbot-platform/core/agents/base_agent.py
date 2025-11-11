@@ -14,6 +14,7 @@ from .agent_graph import get_agent_graph
 from ..llm.config import LLMConfig
 from ..llm.llm import LLM
 from ..tools.executor import process_tool_invocations
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,8 @@ class BaseAgent:
         self.state.max_iterations = self.max_iterations
 
         # Initialize LLM
-        self.llm = LLM(self.llm_config)
+        settings = get_settings()
+        self.llm = LLM(self.llm_config, api_key=settings.anthropic_api_key)
 
         # Register in agent graph
         graph = get_agent_graph()
