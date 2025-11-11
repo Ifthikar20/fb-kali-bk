@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # RAG Configuration
     rag_enabled: bool = True
     rag_vector_db: str = "chromadb"  # or "pgvector"
-    rag_chroma_persist_dir: str = "/data/chromadb"
+    rag_chroma_persist_dir: str = "./data/chromadb"  # Relative path for cross-platform compatibility
     rag_embedding_model: str = "all-MiniLM-L6-v2"
     rag_embedding_dimensions: int = 384
     rag_top_k_results: int = 5
