@@ -35,13 +35,39 @@ class DynamicContainerManager:
         Args:
             network_name: Docker network to attach containers to
         """
-        try:
-            self.client = docker.from_env()
-            self.network_name = network_name
-            logger.info("Docker client initialized successfully")
-        except DockerException as e:
-            logger.error(f"Failed to initialize Docker client: {e}")
-            raise
+        import os
+
+        # Try multiple methods to connect to Docker on macOS
+        connection_methods = [
+            ("default from_env()", lambda: docker.from_env()),
+            ("unix:///var/run/docker.sock", lambda: docker.DockerClient(base_url='unix:///var/run/docker.sock')),
+            (f"unix://{os.path.expanduser('~')}/.docker/run/docker.sock",
+             lambda: docker.DockerClient(base_url=f"unix://{os.path.expanduser('~')}/.docker/run/docker.sock")),
+        ]
+
+        last_error = None
+        for method_name, connect_func in connection_methods:
+            try:
+                logger.info(f"Attempting Docker connection via: {method_name}")
+                self.client = connect_func()
+                # Test the connection
+                self.client.ping()
+                self.network_name = network_name
+                logger.info(f"✓ Docker client initialized successfully via: {method_name}")
+                return
+            except Exception as e:
+                logger.debug(f"Failed to connect via {method_name}: {e}")
+                last_error = e
+                continue
+
+        # If we get here, all methods failed
+        error_msg = (
+            "Could not connect to Docker. Please ensure Docker Desktop is running.\n"
+            "On macOS: Check that Docker Desktop is running in your Applications.\n"
+            f"Last error: {last_error}"
+        )
+        logger.error(error_msg)
+        raise DockerException(error_msg)
 
     async def spawn_kali_agents(
         self,
