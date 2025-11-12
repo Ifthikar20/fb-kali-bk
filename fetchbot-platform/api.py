@@ -799,6 +799,56 @@ async def start_dynamic_scan(
     }
 
 
+@app.post("/scans/start")
+async def start_scan_ui(
+    scan_data: ScanCreate,
+    background_tasks: BackgroundTasks,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """
+    Start a scan (UI-compatible endpoint)
+    This is an alias for /scan endpoint to support frontend compatibility
+    """
+    # Support both JWT tokens and API keys
+    org, user = verify_user_or_api_key(credentials, db)
+
+    from config import get_settings
+    settings = get_settings()
+
+    # Create job with generic name
+    job = PentestJob(
+        organization_id=org.id,
+        name=f"Security Scan - {scan_data.target}",
+        target=scan_data.target,
+        attack_ip=org.elastic_ip,
+        status=JobStatus.QUEUED
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    logger.info(f"[SCAN] Starting scan for target: {scan_data.target}, job_id: {job.id}")
+
+    # Start dynamic scan in background with RAG enabled
+    background_tasks.add_task(
+        run_dynamic_scan,
+        job.id,
+        org.elastic_ip,
+        scan_data.target,
+        settings.database_url
+    )
+
+    return {
+        "job_id": job.id,
+        "scan_id": job.id,  # Add scan_id for frontend compatibility
+        "status": job.status.value,
+        "message": "Security scan started with RAG-enhanced intelligence",
+        "target": scan_data.target
+    }
+
+
 @app.get("/scan/{job_id}")
 async def get_scan_status(
     job_id: str,
