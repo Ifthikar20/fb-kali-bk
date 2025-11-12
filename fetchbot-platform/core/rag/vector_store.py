@@ -31,7 +31,7 @@ class VectorStore:
 
     def __init__(
         self,
-        persist_directory: str = "/data/chromadb",
+        persist_directory: str = "./data/chromadb",
         embedding_function=None
     ):
         """
@@ -418,7 +418,7 @@ class VectorStore:
 _vector_store_instance = None
 
 
-def get_vector_store(persist_directory: str = "/data/chromadb") -> VectorStore:
+def get_vector_store(persist_directory: str = "./data/chromadb") -> VectorStore:
     """
     Get or create singleton vector store instance.
 
