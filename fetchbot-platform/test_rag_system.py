@@ -104,21 +104,18 @@ async def test_rag_system():
     print("-" * 70)
     try:
         from core.rag.retrieval_service import get_rag_service
-        from core.rag.models import RAGQueryRequest, CollectionType
 
         retrieval_svc = get_rag_service()
 
         # Test querying tool knowledge
-        query = RAGQueryRequest(
-            query="SQL injection testing tools",
-            collection=CollectionType.TOOL_KNOWLEDGE,
-            top_k=3,
-            min_similarity=0.3
+        query = "SQL injection testing tools"
+
+        results = await retrieval_svc.query_tool_knowledge(
+            query=query,
+            top_k=3
         )
 
-        results = await retrieval_svc.query_tool_knowledge(query)
-
-        print(f"✅ Query: '{query.query}'")
+        print(f"✅ Query: '{query}'")
         print(f"✅ Found {len(results)} relevant tools")
 
         if results:
@@ -184,22 +181,33 @@ async def test_rag_system():
     print("Test 6: Prompt Augmentation")
     print("-" * 70)
     try:
-        original_prompt = "Test this WordPress site for vulnerabilities"
+        base_prompt = "Test this WordPress site for vulnerabilities"
 
-        augmented_prompt = await retrieval_svc.augment_agent_prompt(
-            original_prompt=original_prompt,
-            scan_context=context
+        # First, retrieve some contexts based on the scan
+        retrieved_contexts = await retrieval_svc.query_tool_knowledge(
+            query="WordPress security testing tools and techniques",
+            top_k=5
         )
 
-        print(f"✅ Original prompt length: {len(original_prompt)} chars")
+        # Then augment the prompt with retrieved contexts
+        augmented_prompt = await retrieval_svc.augment_agent_prompt(
+            base_prompt=base_prompt,
+            retrieved_contexts=retrieved_contexts
+        )
+
+        print(f"✅ Original prompt length: {len(base_prompt)} chars")
+        print(f"✅ Retrieved contexts: {len(retrieved_contexts)}")
         print(f"✅ Augmented prompt length: {len(augmented_prompt)} chars")
-        print(f"✅ Added context: {len(augmented_prompt) - len(original_prompt)} chars")
+        print(f"✅ Added context: {len(augmented_prompt) - len(base_prompt)} chars")
 
         print()
         print("Preview of augmented prompt:")
         print("-" * 70)
         print(augmented_prompt[:500])
-        print("...")
+        if len(augmented_prompt) > 500:
+            print("...")
+        else:
+            print(augmented_prompt)
 
     except Exception as e:
         print(f"❌ Prompt augmentation failed: {e}")
