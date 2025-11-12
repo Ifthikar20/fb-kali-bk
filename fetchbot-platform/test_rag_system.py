@@ -103,10 +103,10 @@ async def test_rag_system():
     print("Test 4: Retrieval Service - Tool Knowledge Query")
     print("-" * 70)
     try:
-        from core.rag.retrieval_service import get_retrieval_service
+        from core.rag.retrieval_service import get_rag_service
         from core.rag.models import RAGQueryRequest, CollectionType
 
-        retrieval_svc = get_retrieval_service()
+        retrieval_svc = get_rag_service()
 
         # Test querying tool knowledge
         query = RAGQueryRequest(
