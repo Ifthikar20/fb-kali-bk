@@ -129,6 +129,16 @@ def get_tool_registry() -> Dict[str, Dict[str, Any]]:
     return _TOOL_REGISTRY
 
 
+def get_all_tools() -> List[Dict[str, Any]]:
+    """
+    Get all registered tools as a list
+
+    Returns:
+        List of tool information dictionaries
+    """
+    return list(_TOOL_REGISTRY.values())
+
+
 def get_tool(tool_name: str) -> Optional[Dict[str, Any]]:
     """Get a specific tool by name"""
     return _TOOL_REGISTRY.get(tool_name)
