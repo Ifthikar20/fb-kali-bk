@@ -51,6 +51,11 @@ class AgentState:
         # Findings discovered by this agent
         self.findings: List[Dict[str, Any]] = []
 
+        # Tool execution tracking (for evidence validation)
+        self.tool_executions: List[Dict[str, Any]] = []
+        self.successful_tools: set = set()  # Track tools that succeeded at least once
+        self.failed_tools: set = set()  # Track tools that failed
+
         # Iteration tracking
         self.iteration = 0
         self.max_iterations = 50
@@ -114,6 +119,45 @@ class AgentState:
     def get_findings(self) -> List[Dict[str, Any]]:
         """Get all findings discovered by this agent"""
         return self.findings
+
+    def track_tool_execution(self, tool_name: str, success: bool, result: Any = None):
+        """
+        Track tool execution for evidence validation
+
+        Args:
+            tool_name: Name of the tool executed
+            success: Whether the tool succeeded
+            result: Tool execution result (optional)
+        """
+        execution_record = {
+            "tool_name": tool_name,
+            "success": success,
+            "timestamp": datetime.utcnow().isoformat(),
+            "iteration": self.iteration
+        }
+
+        self.tool_executions.append(execution_record)
+
+        if success:
+            self.successful_tools.add(tool_name)
+            logger.debug(f"✅ Tool '{tool_name}' executed successfully")
+        else:
+            self.failed_tools.add(tool_name)
+            logger.debug(f"❌ Tool '{tool_name}' execution failed")
+
+    def has_successful_tool_executions(self) -> bool:
+        """Check if ANY tool has executed successfully"""
+        return len(self.successful_tools) > 0
+
+    def get_tool_execution_summary(self) -> Dict[str, Any]:
+        """Get summary of tool executions for debugging"""
+        return {
+            "total_executions": len(self.tool_executions),
+            "successful_tools": list(self.successful_tools),
+            "failed_tools": list(self.failed_tools),
+            "success_count": len([e for e in self.tool_executions if e["success"]]),
+            "failure_count": len([e for e in self.tool_executions if not e["success"]])
+        }
 
     def set_final_result(self, result: Dict[str, Any]):
         """

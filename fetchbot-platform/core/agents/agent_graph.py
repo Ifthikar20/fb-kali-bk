@@ -44,6 +44,11 @@ class AgentGraph:
         self.edges: List[Dict[str, str]] = []
         self.messages: List[Dict[str, Any]] = []
         self.agents: Dict[str, Any] = {}  # agent_id -> agent instance
+
+        # Task deduplication tracking
+        # Format: task_key -> {"agent_id": str, "timestamp": str, "result": Any}
+        self.executed_tasks: Dict[str, Dict[str, Any]] = {}
+
         self._initialized = True
 
         logger.info("Agent graph initialized")
@@ -218,12 +223,82 @@ class AgentGraph:
 
         return build_tree(root_id)
 
+    def _make_task_key(self, tool_name: str, params: Dict[str, Any]) -> str:
+        """
+        Create a unique key for a task based on tool name and parameters
+
+        Args:
+            tool_name: Name of the tool
+            params: Tool parameters
+
+        Returns:
+            Unique task key string
+        """
+        import json
+        import hashlib
+
+        # Sort params to ensure consistent hashing
+        sorted_params = json.dumps(params, sort_keys=True)
+        param_hash = hashlib.md5(sorted_params.encode()).hexdigest()[:8]
+
+        return f"{tool_name}:{param_hash}"
+
+    def is_task_already_executed(self, tool_name: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Check if this task has already been executed by another agent
+
+        Args:
+            tool_name: Name of the tool
+            params: Tool parameters
+
+        Returns:
+            Task execution info if already executed, None otherwise
+        """
+        task_key = self._make_task_key(tool_name, params)
+        return self.executed_tasks.get(task_key)
+
+    def register_task_execution(
+        self,
+        tool_name: str,
+        params: Dict[str, Any],
+        agent_id: str,
+        result: Any = None
+    ):
+        """
+        Register that a task has been executed
+
+        Args:
+            tool_name: Name of the tool executed
+            params: Tool parameters
+            agent_id: ID of agent that executed the task
+            result: Task execution result (optional)
+        """
+        task_key = self._make_task_key(tool_name, params)
+
+        self.executed_tasks[task_key] = {
+            "tool_name": tool_name,
+            "agent_id": agent_id,
+            "agent_name": self.nodes.get(agent_id, {}).get("name", "Unknown"),
+            "timestamp": datetime.utcnow().isoformat(),
+            "result_available": result is not None
+        }
+
+        logger.debug(f"Registered task execution: {task_key} by agent {agent_id}")
+
+    def get_task_execution_stats(self) -> Dict[str, Any]:
+        """Get statistics about task executions"""
+        return {
+            "total_tasks_executed": len(self.executed_tasks),
+            "unique_tools_used": len(set(t["tool_name"] for t in self.executed_tasks.values()))
+        }
+
     def clear(self):
         """Clear the graph (for testing or reset)"""
         self.nodes.clear()
         self.edges.clear()
         self.messages.clear()
         self.agents.clear()
+        self.executed_tasks.clear()
         logger.info("Agent graph cleared")
 
 

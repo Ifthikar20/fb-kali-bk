@@ -428,6 +428,30 @@ def create_vulnerability_report(
                 "message": "Vulnerability report rejected due to domain mismatch"
             }
 
+    # CRITICAL: Check if ANY tools have executed successfully
+    # Prevents fabricated vulnerabilities when all tools failed (e.g., containers deleted)
+    if not agent_state.has_successful_tool_executions():
+        tool_summary = agent_state.get_tool_execution_summary()
+        error_msg = (
+            f"REJECTED: Cannot report vulnerability - ALL tools failed!\n"
+            f"Tool execution summary:\n"
+            f"  - Total executions: {tool_summary['total_executions']}\n"
+            f"  - Successful: {tool_summary['success_count']}\n"
+            f"  - Failed: {tool_summary['failure_count']}\n"
+            f"  - Failed tools: {', '.join(tool_summary['failed_tools']) if tool_summary['failed_tools'] else 'none'}\n"
+            f"\n"
+            f"Evidence MUST be based on actual tool results, not assumptions!\n"
+            f"If your tools are failing (e.g., 'connection refused'), you CANNOT report vulnerabilities.\n"
+            f"Wait for tools to succeed before reporting findings."
+        )
+        logger.warning(f"Rejected vulnerability report: {title} - {error_msg}")
+        return {
+            "status": "rejected",
+            "error": error_msg,
+            "message": "Vulnerability report rejected - no successful tool executions",
+            "tool_summary": tool_summary
+        }
+
     finding = {
         "title": title,
         "severity": severity.upper(),

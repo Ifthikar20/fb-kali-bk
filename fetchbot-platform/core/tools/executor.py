@@ -251,6 +251,9 @@ async def process_tool_invocations(
 
     should_finish = False
 
+    # Import agent graph for task deduplication
+    from core.agents.agent_graph import get_agent_graph
+
     for tool_inv in tool_invocations:
         tool_name = tool_inv.get("toolName")
         args = tool_inv.get("args", {})
@@ -258,11 +261,55 @@ async def process_tool_invocations(
         # Auto-fix any placeholder URLs in arguments
         args = auto_fix_url_params(args, actual_target)
 
+        # Check for task deduplication (skip for coordination tools)
+        # Coordination tools should always execute (finish_scan, create_agent, etc.)
+        coordination_tools = {
+            "finish_scan", "agent_finish", "create_agent", "send_message",
+            "get_my_agents", "get_scan_status", "create_vulnerability_report"
+        }
+
+        if tool_name not in coordination_tools:
+            graph = get_agent_graph()
+            previous_execution = graph.is_task_already_executed(tool_name, args)
+
+            if previous_execution:
+                logger.warning(
+                    f"⚠️ Task '{tool_name}' already executed by {previous_execution['agent_name']} "
+                    f"at {previous_execution['timestamp']} - skipping duplicate work"
+                )
+
+                # Add skip notification to conversation history
+                skip_xml = f"""<tool_result>
+<tool_name>{tool_name}</tool_name>
+<skipped>true</skipped>
+<reason>Task already executed by {previous_execution['agent_name']} at {previous_execution['timestamp']}</reason>
+<message>Skipping duplicate work - results should be available from previous execution</message>
+</tool_result>"""
+
+                conversation_history.append({
+                    "role": "user",
+                    "content": skip_xml
+                })
+
+                continue  # Skip this tool execution
+
         logger.info(f"Executing tool: {tool_name}")
 
         try:
             # Execute the tool
             result = await execute_tool(tool_name, agent_state, **args)
+
+            # Track successful tool execution
+            agent_state.track_tool_execution(tool_name, success=True, result=result)
+
+            # Register task execution in graph for deduplication (skip coordination tools)
+            if tool_name not in coordination_tools:
+                graph.register_task_execution(
+                    tool_name=tool_name,
+                    params=args,
+                    agent_id=agent_state.agent_id,
+                    result=result
+                )
 
             # Format result as XML for LLM
             observation_xml = f"""<tool_result>
@@ -276,11 +323,31 @@ async def process_tool_invocations(
                 "content": observation_xml
             })
 
-            # Check if this is a finish tool
+            # Check if this is a finish tool AND it succeeded
             if tool_name in ("finish_scan", "agent_finish"):
-                should_finish = True
+                # Only finish if the tool returned success status
+                # finish_scan returns {"status": "scan_complete"} on success
+                # or {"status": "error"} if agents still running
+                if isinstance(result, dict):
+                    if tool_name == "finish_scan" and result.get("status") == "scan_complete":
+                        should_finish = True
+                        logger.info("✅ finish_scan succeeded - agent will complete")
+                    elif tool_name == "agent_finish" and result.get("status") != "error":
+                        should_finish = True
+                        logger.info("✅ agent_finish succeeded - agent will complete")
+                    else:
+                        logger.warning(
+                            f"⚠️ {tool_name} called but returned error status - "
+                            "agent will continue running"
+                        )
+                else:
+                    # Backward compatibility: if result is not a dict, finish anyway
+                    should_finish = True
 
         except ToolExecutionError as e:
+            # Track failed tool execution
+            agent_state.track_tool_execution(tool_name, success=False, result=str(e))
+
             # Add error to conversation history so LLM can handle it
             error_xml = f"""<tool_result>
 <tool_name>{tool_name}</tool_name>
